@@ -1617,6 +1617,7 @@ export async function buildTransformedCodexRequestBody(
 		reasoningSummary: options?.reasoningSummary,
 		reasoningContext: options?.reasoningContext,
 		textVerbosity: options?.textVerbosity,
+		responseFormat: options?.responseFormat,
 		include: options?.include,
 		responsesLite: options?.responsesLite,
 	};

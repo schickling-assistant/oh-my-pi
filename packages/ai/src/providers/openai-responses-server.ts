@@ -44,6 +44,7 @@ import {
 	openaiResponsesRequestSchema,
 } from "./openai-responses-server-schema";
 import { coerceNullMessageContentInPlace, encodeTextSignatureV1, parseTextSignature } from "./openai-shared";
+import { parseResponseFormat } from "./response-format";
 
 export type { ParsedRequest };
 
@@ -612,6 +613,8 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
 	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
 	if (Array.isArray(data.include)) options.include = data.include.filter(isOpenAIResponseInclude);
+	if (data.text !== undefined && isObj(data.text))
+		options.responseFormat = parseResponseFormat(data.text.format, "responses");
 	const cacheKey = resolvePromptCacheKey(body, headers);
 	if (cacheKey !== undefined) options.promptCacheKey = cacheKey;
 	if (data.previous_response_id !== undefined) options.previousResponseId = data.previous_response_id;

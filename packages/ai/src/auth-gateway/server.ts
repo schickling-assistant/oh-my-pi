@@ -145,7 +145,7 @@ function serializeTools(context: Context): string | undefined {
 	return context.tools && context.tools.length > 0 ? JSON.stringify(context.tools) : undefined;
 }
 
-function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: AbortSignal): SimpleStreamOptions {
+export function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: AbortSignal): SimpleStreamOptions {
 	const opts: SimpleStreamOptions = { signal, cursorExternalToolExecutor: true };
 	const { options } = parsed;
 	// Codex backend rejects every sampling control with
@@ -186,6 +186,7 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	}
 	if (options.serviceTier !== undefined) opts.serviceTier = options.serviceTier;
 	if (options.cacheRetention !== undefined) opts.cacheRetention = options.cacheRetention;
+	if (options.responseFormat !== undefined) opts.responseFormat = options.responseFormat;
 	if (options.include !== undefined) opts.include = options.include;
 	// Client-supplied `prompt_cache_key` wins; otherwise derive a stable
 	// key from the model + system + tools so prefix caching engages on
@@ -219,8 +220,7 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 		options.previousResponseId !== undefined ||
 		options.seed !== undefined ||
 		options.logitBias !== undefined ||
-		options.user !== undefined ||
-		options.responseFormat !== undefined
+		options.user !== undefined
 	) {
 		logger.debug("auth-gateway dropped unsupported typed options", {
 			api,
@@ -229,10 +229,28 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 			seed: options.seed,
 			hasLogitBias: options.logitBias !== undefined,
 			user: options.user,
-			hasResponseFormat: options.responseFormat !== undefined,
 		});
 	}
 	return opts;
+}
+
+/** Reject constrained output rather than silently returning prose on an unsupported backend. */
+export function responseFormatRejection(parsed: ParsedFormatRequest, model: Model<Api>): string | undefined {
+	const format = parsed.options.responseFormat;
+	if (!format || format.type === "text") return undefined;
+	if (model.api === "anthropic-messages" && format.type === "json_object") {
+		return `Model ${model.provider}/${model.id} cannot enforce json_object response format; use json_schema`;
+	}
+	if (
+		model.api === "anthropic-messages" ||
+		model.api === "openai-completions" ||
+		model.api === "openai-responses" ||
+		model.api === "openai-codex-responses" ||
+		model.api === "azure-openai-responses" ||
+		model.api === "openrouter"
+	)
+		return undefined;
+	return `Model ${model.provider}/${model.id} cannot enforce ${format.type} response format`;
 }
 
 function clientClosedResponse(route: { module: FormatModule }): Response {
@@ -313,6 +331,8 @@ async function handleFormatEndpoint(
 		const message = error instanceof Error ? error.message : String(error);
 		return route.module.formatError(400, "invalid_request_error", message);
 	}
+	const formatRejection = responseFormatRejection(parsed, model);
+	if (formatRejection) return route.module.formatError(400, "invalid_request_error", formatRejection);
 	// Merge gateway-captured passthrough headers under the parser's own
 	// captures. Parsers that set `options.headers` themselves win (they may
 	// have stripped or normalized values); the gateway's allow-list fills in

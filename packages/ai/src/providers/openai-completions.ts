@@ -125,6 +125,7 @@ import {
 	NON_VISION_IMAGE_PLACEHOLDER,
 } from "./vision-guard";
 
+import { toChatResponseFormat } from "./response-format";
 export { applyOpenRouterRoutingVariant } from "./openai-shared";
 
 type OpenAICompletionsReasoningField = NonNullable<ResolvedOpenAICompat["reasoningContentField"]>;
@@ -2164,6 +2165,9 @@ function buildParams(
 		dropThinkingWhenReasoningEffort: compat.dropThinkingWhenReasoningEffort,
 	});
 	applyOpenAIChatCompletionsPromptCachePolicy(params, model, options);
+	if (options?.responseFormat !== undefined) {
+		params.response_format = toChatResponseFormat(options.responseFormat);
+	}
 
 	return {
 		params,

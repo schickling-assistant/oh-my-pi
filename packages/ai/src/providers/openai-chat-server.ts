@@ -31,6 +31,7 @@ import {
 } from "./openai-chat-server-schema";
 import { decodeDataUri } from "./openai-data-uri";
 import { coerceNullMessageContentInPlace } from "./openai-shared";
+import { parseResponseFormat } from "./response-format";
 
 export type { ParsedRequest };
 
@@ -198,7 +199,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	if (data.seed !== undefined) options.seed = data.seed;
 	if (data.logit_bias !== undefined) options.logitBias = data.logit_bias;
 	if (data.user !== undefined) options.user = data.user;
-	if (data.response_format !== undefined) options.responseFormat = data.response_format;
+	if (data.response_format !== undefined) options.responseFormat = parseResponseFormat(data.response_format, "chat");
 	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
 	if (data.reasoning_effort === "none") {
 		options.forceReasoningOff = true;

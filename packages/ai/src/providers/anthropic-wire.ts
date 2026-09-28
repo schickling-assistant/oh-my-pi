@@ -288,8 +288,8 @@ export type ThinkingConfigParam =
 export type OutputConfig = {
 	/** Adaptive-thinking effort level (effort beta). */
 	effort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
-	/** Structured format, excluded on compaction requests. */
-	format?: unknown;
+	/** Structured output JSON Schema (structured-outputs beta). */
+	format?: { type: "json_schema"; schema: Record<string, unknown> };
 	/** Task-budgets beta. */
 	task_budget?: TokenTaskBudget | null;
 };
