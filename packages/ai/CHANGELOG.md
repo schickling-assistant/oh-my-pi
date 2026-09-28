@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added native JSON Schema output through the auth-gateway for Anthropic Messages and OpenAI-family APIs, with provider-specific schema adaptation ([PR link to add after creation] by [@schickling-assistant](https://github.com/schickling-assistant)).
+
 ### Fixed
 
 - Fixed DeepSeek `/responses` requests failing with `400 No tool output found` when a repaired orphan tool-result note landed between two outputs of the same tool round, and with `400 The reasoning_text in the thinking mode must be passed back` when replayed history lacked reasoning for an assistant turn ([#13083](https://github.com/can1357/oh-my-pi/issues/13083)).
