@@ -284,4 +284,44 @@ describe("response format in provider requests", () => {
 			json_schema: { name: "answer", schema, strict: true, description: "Single answer" },
 		});
 	});
+	it("sends OpenAI-compatible names for schema identifiers across all OpenAI wire formats", async () => {
+		const responseFormat: ResponseFormat = { ...format, name: "Bakeoff.Document" };
+		const codex = await buildTransformedCodexRequestBody(model("openai-codex-responses", "openai-codex"), context, {
+			responseFormat,
+		});
+		expect(field(codex.text?.format, "name")).toBe("Bakeoff_Document");
+
+		const responses = Promise.withResolvers<unknown>();
+		streamOpenAIResponses(model("openai-responses", "openai"), context, {
+			apiKey: "test",
+			signal: abortedSignal(),
+			responseFormat,
+			onPayload: payload => responses.resolve(payload),
+		});
+		expect(field(field(field(await responses.promise, "text"), "format"), "name")).toBe("Bakeoff_Document");
+
+		const chat = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model("openai-completions", "openai"), context, {
+			apiKey: "test",
+			signal: abortedSignal(),
+			responseFormat,
+			onPayload: payload => chat.resolve(payload),
+		});
+		expect(field(field(field(await chat.promise, "response_format"), "json_schema"), "name")).toBe(
+			"Bakeoff_Document",
+		);
+		expect(responseFormat.name).toBe("Bakeoff.Document");
+	});
+
+	it("caps names at 64 characters and falls back for empty names", async () => {
+		for (const [name, expected] of [
+			["A".repeat(70), "A".repeat(64)],
+			["", "response"],
+		]) {
+			const body = await buildTransformedCodexRequestBody(model("openai-codex-responses", "openai-codex"), context, {
+				responseFormat: { ...format, name },
+			});
+			expect(field(body.text?.format, "name")).toBe(expected);
+		}
+	});
 });
