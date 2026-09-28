@@ -115,6 +115,7 @@ import {
 	shouldDropAutoToolChoiceForReasoning,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
+import { adaptOpenAIResponseFormat } from "./response-format";
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
@@ -1750,7 +1751,7 @@ export function buildParams(
 	applyOpenAIExtraBody(params, options?.extraBody);
 	applyOpenAIResponsesPromptCachePolicy(params, model, options, statefulCacheBaseline);
 	if (options?.responseFormat !== undefined) {
-		params.text = { ...params.text, format: options.responseFormat };
+		params.text = { ...params.text, format: adaptOpenAIResponseFormat(options.responseFormat) };
 	}
 
 	let trailingScaffoldingItems = 0;

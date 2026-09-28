@@ -34,6 +34,16 @@ describe("auth-gateway classifyGatewayError", () => {
 			["status: 401 unauthorized", 401, "authentication_error"],
 			["status_code=400 — bad json", 400, "invalid_request_error"],
 			["Anthropic API error (529): overloaded", 529, "upstream_error"],
+			[
+				'400 {"type":"error","error":{"type":"invalid_request_error","message":"output_config.format.schema"}}',
+				400,
+				"invalid_request_error",
+			],
+			[
+				"Codex error event: Invalid schema for response_format (code=invalid_json_schema)",
+				400,
+				"invalid_request_error",
+			],
 		];
 		for (const [msg, status, type] of cases) {
 			const c = classifyGatewayError(new Error(msg));

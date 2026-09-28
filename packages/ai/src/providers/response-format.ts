@@ -2,6 +2,7 @@ import { type } from "@oh-my-pi/omptype";
 import { logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type { ResponseFormat } from "../types";
+import { adaptSchemaForStrict, validateSchemaCompatibility } from "../utils/schema";
 
 const schemaObject = type({ "[string]": "unknown" });
 const textFormat = type({ type: "'text'" });
@@ -56,7 +57,25 @@ export function parseResponseFormat(
 	return undefined;
 }
 
-export function toChatResponseFormat(format: ResponseFormat) {
+/**
+ * Strict grammar requires every object property, changing optional fields into
+ * required nullable ones. Preserve the caller's shape with a non-strict schema.
+ */
+export function adaptOpenAIResponseFormat(format: ResponseFormat): ResponseFormat {
+	if (format.type !== "json_schema" || format.strict !== true) return format;
+	if (
+		validateSchemaCompatibility(format.schema, "openai-strict").violations.some(
+			violation => violation.rule === "strict-object-required",
+		)
+	) {
+		return { ...format, strict: false };
+	}
+	const adapted = adaptSchemaForStrict(format.schema, true);
+	return { ...format, schema: adapted.schema, strict: adapted.strict };
+}
+
+export function toChatResponseFormat(input: ResponseFormat) {
+	const format = adaptOpenAIResponseFormat(input);
 	switch (format.type) {
 		case "text":
 			return { type: "text" as const };
