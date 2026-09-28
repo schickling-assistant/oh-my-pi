@@ -64,7 +64,7 @@ export function classifyGatewayError(err: unknown): GatewayErrorClassification {
 	if (/\b(?:unauthorized|forbidden)\b/i.test(message)) {
 		return { status: 401, type: "authentication_error", message };
 	}
-	if (/\b(?:unsupported|invalid_request|invalid request|bad request|malformed)\b/i.test(message)) {
+	if (/\b(?:unsupported|invalid_request|invalid_json_schema|invalid request|bad request|malformed)\b/i.test(message)) {
 		return { status: 400, type: "invalid_request_error", message };
 	}
 	return { status: 502, type: "upstream_error", message };
@@ -86,10 +86,11 @@ function extractEmbeddedStatus(message: string): number | undefined {
 	// `Google API error (400)`, `OpenAI API error (429): …`, `(503)`
 	// `HTTP 429: too many requests`
 	// `status: 503`, `status_code=429`, `status=400`
-	const re = /(?:\bHTTP\b|\bAPI error\b|\bstatus(?:[- _]?code)?\b)\s*[:=]?\s*\(?\s*(\d{3})\b|\((\d{3})\)/i;
+	const re =
+		/(?:\bHTTP\b|\bAPI error\b|\bstatus(?:[- _]?code)?\b)\s*[:=]?\s*\(?\s*(\d{3})\b|\((\d{3})\)|^\s*(\d{3})\b/i;
 	const m = message.match(re);
 	if (!m) return undefined;
-	const raw = m[1] ?? m[2];
+	const raw = m[1] ?? m[2] ?? m[3];
 	if (!raw) return undefined;
 	const code = Number.parseInt(raw, 10);
 	return Number.isFinite(code) && code >= 100 && code < 600 ? code : undefined;

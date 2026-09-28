@@ -41,6 +41,7 @@ import {
 	parseAzureDeploymentNameMap,
 	processResponsesStream,
 } from "./openai-shared";
+import { adaptOpenAIResponseFormat } from "./response-format";
 
 export { parseAzureDeploymentNameMap } from "./openai-shared";
 
@@ -397,7 +398,7 @@ function buildParams(
 	applyCommonResponsesSamplingParams(params, options, model);
 	if (options?.include?.length) params.include = Array.from(new Set(options.include));
 	if (options?.responseFormat !== undefined) {
-		params.text = { ...params.text, format: options.responseFormat };
+		params.text = { ...params.text, format: adaptOpenAIResponseFormat(options.responseFormat) };
 	}
 
 	if (context.tools) {

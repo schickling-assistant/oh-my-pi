@@ -3,6 +3,7 @@ import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { Model, ResponseFormat } from "../../types";
 import { mapOpenAIReasoningEffort } from "../openai-shared";
+import { adaptOpenAIResponseFormat } from "../response-format";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
@@ -549,7 +550,7 @@ export async function transformRequestBody(
 		};
 	}
 	if (options.responseFormat !== undefined) {
-		body.text = { ...body.text, format: options.responseFormat };
+		body.text = { ...body.text, format: adaptOpenAIResponseFormat(options.responseFormat) };
 	}
 
 	const include = Array.isArray(options.include) ? [...options.include] : [];

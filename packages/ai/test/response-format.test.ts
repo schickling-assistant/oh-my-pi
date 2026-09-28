@@ -173,6 +173,37 @@ describe("response format in provider requests", () => {
 		expect(field(field(await capture(), "output_config"), "format")).toBeUndefined();
 	});
 
+	it("demotes Anthropic unsupported numeric and array bounds without changing the input schema", async () => {
+		const boundedSchema = {
+			type: "object",
+			properties: {
+				count: { type: "number", minimum: 0, maximum: 10 },
+				items: { type: "array", items: { type: "string" }, maxItems: 3 },
+			},
+			required: ["count", "items"],
+		};
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamAnthropic(model("anthropic-messages", "anthropic"), context, {
+			apiKey: "sk-ant-oat-test",
+			isOAuth: true,
+			signal: abortedSignal(),
+			responseFormat: { type: "json_schema", name: "bounded", schema: boundedSchema },
+			onPayload: payload => resolve(payload),
+		});
+		const wire = field(field(await promise, "output_config"), "format");
+		expect(field(wire, "schema")).toEqual({
+			type: "object",
+			properties: {
+				count: { type: "number", description: "{minimum: 0, maximum: 10}" },
+				items: { type: "array", items: { type: "string" }, description: "{maxItems: 3}" },
+			},
+			required: ["count", "items"],
+			additionalProperties: false,
+		});
+		expect(boundedSchema.properties.count.minimum).toBe(0);
+		expect(boundedSchema.properties.items.maxItems).toBe(3);
+	});
+
 	it.each([
 		["API key", "test-key"],
 		["OAuth", "sk-ant-oat-test"],
@@ -205,6 +236,28 @@ describe("response format in provider requests", () => {
 			textVerbosity: "low",
 		});
 		expect(body.text).toEqual({ format, verbosity: "low" });
+	});
+
+	it("preserves optional fields by disabling Codex strict mode for incomplete required sets", async () => {
+		const optionalSchema = {
+			type: "object",
+			properties: {
+				answer: { type: "string" },
+				details: { type: "object", properties: { rationale: { type: "string" } }, required: [] },
+			},
+			required: ["answer"],
+			additionalProperties: false,
+		};
+		const body = await buildTransformedCodexRequestBody(model("openai-codex-responses", "openai-codex"), context, {
+			responseFormat: { type: "json_schema", name: "optional", schema: optionalSchema, strict: true },
+		});
+		expect(body.text?.format).toEqual({
+			type: "json_schema",
+			name: "optional",
+			schema: optionalSchema,
+			strict: false,
+		});
+		expect(optionalSchema.required).toEqual(["answer"]);
 	});
 
 	it("sends OpenAI Responses text.format", async () => {

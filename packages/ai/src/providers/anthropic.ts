@@ -4689,7 +4689,10 @@ function buildParams(
 		}
 	}
 	if (options?.responseFormat?.type === "json_schema" && !compactionRequest) {
-		outputConfigEntries.format = { type: "json_schema", schema: options.responseFormat.schema };
+		const normalized = normalizeAnthropicToolSchema(options.responseFormat.schema);
+		if (!isRecord(normalized))
+			throw new AIError.ValidationError("Anthropic response format must be a JSON Schema object");
+		outputConfigEntries.format = { type: "json_schema", schema: normalized };
 	} else if (options?.responseFormat?.type === "json_object") {
 		logger.debug("anthropic: json_object response format is unsupported; use json_schema");
 	}
