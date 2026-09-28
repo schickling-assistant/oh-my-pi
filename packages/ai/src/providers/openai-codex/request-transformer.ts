@@ -1,7 +1,7 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
-import type { Model } from "../../types";
+import type { Model, ResponseFormat } from "../../types";
 import { mapOpenAIReasoningEffort } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
@@ -37,6 +37,7 @@ export interface CodexRequestOptions {
 	/** Explicit `reasoning.context` override. Omitted by default; Responses Lite forces `all_turns` as required by that transport. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
+	responseFormat?: ResponseFormat;
 	include?: string[];
 	/**
 	 * Responses Lite transport opt-in. Normal inference defaults to full
@@ -79,6 +80,15 @@ export interface RequestBody {
 	reasoning?: Partial<ReasoningConfig>;
 	text?: {
 		verbosity?: "low" | "medium" | "high";
+		format?:
+			| { type: "text" | "json_object" }
+			| {
+					type: "json_schema";
+					name: string;
+					schema: Record<string, unknown>;
+					strict?: boolean;
+					description?: string;
+			  };
 	};
 	include?: string[];
 	prompt_cache_key?: string;
@@ -537,6 +547,9 @@ export async function transformRequestBody(
 			...body.text,
 			verbosity: options.textVerbosity,
 		};
+	}
+	if (options.responseFormat !== undefined) {
+		body.text = { ...body.text, format: options.responseFormat };
 	}
 
 	const include = Array.isArray(options.include) ? [...options.include] : [];

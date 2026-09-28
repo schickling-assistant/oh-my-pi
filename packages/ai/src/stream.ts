@@ -1829,9 +1829,21 @@ function mapOptionsForApi<TApi extends Api>(
 	apiKey?: string,
 ): OptionsForApi<TApi> {
 	const options = normalizeMandatoryReasoningOptions(model, rawOptions);
+	if (
+		options?.responseFormat &&
+		model.api !== "anthropic-messages" &&
+		model.api !== "openai-completions" &&
+		model.api !== "openai-responses" &&
+		model.api !== "openrouter" &&
+		model.api !== "openai-codex-responses" &&
+		model.api !== "azure-openai-responses"
+	) {
+		logger.debug("response format ignored by unsupported provider", { api: model.api });
+	}
 	const simpleProviderOptions = getProviderDefinition(model.provider)?.mapSimpleOptions?.(options ?? {});
 	const base = {
 		temperature: options?.temperature,
+		responseFormat: options?.responseFormat,
 		topP: options?.topP,
 		topK: options?.topK,
 		minP: options?.minP,

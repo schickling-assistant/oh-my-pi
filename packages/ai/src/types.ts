@@ -403,7 +403,15 @@ export type OpenAIResponseInclude =
 	| "reasoning.encrypted_content"
 	| "message.output_text.logprobs";
 
+/** Provider-neutral requested output format; unsupported providers ignore it. */
+export type ResponseFormat =
+	| { type: "text" }
+	| { type: "json_object" }
+	| { type: "json_schema"; name: string; schema: Record<string, unknown>; strict?: boolean; description?: string };
+
 export interface StreamOptions {
+	/** Constrain the assistant's final text output when the provider supports structured outputs. */
+	responseFormat?: ResponseFormat;
 	temperature?: number;
 	topP?: number;
 	topK?: number;

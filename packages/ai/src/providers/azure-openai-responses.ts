@@ -396,6 +396,9 @@ function buildParams(
 
 	applyCommonResponsesSamplingParams(params, options, model);
 	if (options?.include?.length) params.include = Array.from(new Set(options.include));
+	if (options?.responseFormat !== undefined) {
+		params.text = { ...params.text, format: options.responseFormat };
+	}
 
 	if (context.tools) {
 		const serializedTools: NonNullable<AzureOpenAIResponsesSamplingParams["tools"]> = [];

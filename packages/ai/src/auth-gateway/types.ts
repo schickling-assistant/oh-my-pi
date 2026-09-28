@@ -5,6 +5,7 @@ import type {
 	CacheRetention,
 	Context,
 	OpenAIResponseInclude,
+	ResponseFormat,
 	ServiceTier,
 	TokenTaskBudget,
 } from "../types";
@@ -45,8 +46,8 @@ export interface AuthGatewayParsedRequestOptions {
 	seed?: number;
 	/** OpenAI `logit_bias` map (token id → bias). */
 	logitBias?: Record<string, number>;
-	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
-	responseFormat?: unknown;
+	/** Provider-neutral structured output constraint decoded from the inbound wire. */
+	responseFormat?: ResponseFormat;
 
 	// ── Tools ─────────────────────────────────────────────────────────────
 	toolChoice?: AuthGatewayToolChoice;

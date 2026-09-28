@@ -2098,6 +2098,9 @@ const streamAnthropicOnce = (
 				if (options?.taskBudget && !extraBetas.includes(taskBudgetBeta)) {
 					extraBetas.push(taskBudgetBeta);
 				}
+				if (options?.responseFormat?.type === "json_schema" && !extraBetas.includes(structuredOutputsBeta)) {
+					extraBetas.push(structuredOutputsBeta);
+				}
 				// `output_config.effort` ships on thinking-on requests, explicit
 				// thinking-off adaptive pins, and forced-tool adaptive pins. The beta
 				// must accompany the field even when direct streamAnthropic callers omit
@@ -2491,6 +2494,12 @@ const streamAnthropicOnce = (
 						injectedClientBetaHeaders = mergeAnthropicBetaHeader(
 							injectedClientBetaHeaders ?? mergedCallerHeaders,
 							effortBeta,
+						);
+					}
+					if ((params.output_config as AnthropicOutputConfig | undefined)?.format !== undefined) {
+						injectedClientBetaHeaders = mergeAnthropicBetaHeader(
+							injectedClientBetaHeaders ?? mergedCallerHeaders,
+							structuredOutputsBeta,
 						);
 					}
 					if (carriesSignedCompaction(params)) {
@@ -4678,6 +4687,11 @@ function buildParams(
 		} else {
 			outputConfigEntries.task_budget = options.taskBudget;
 		}
+	}
+	if (options?.responseFormat?.type === "json_schema" && !compactionRequest) {
+		outputConfigEntries.format = { type: "json_schema", schema: options.responseFormat.schema };
+	} else if (options?.responseFormat?.type === "json_object") {
+		logger.debug("anthropic: json_object response format is unsupported; use json_schema");
 	}
 	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
 

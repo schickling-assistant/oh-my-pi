@@ -1363,6 +1363,9 @@ export function buildParams(
 
 	applyOpenAIExtraBody(params, options?.extraBody);
 	applyOpenAIResponsesPromptCachePolicy(params, model, options, statefulCacheBaseline);
+	if (options?.responseFormat !== undefined) {
+		params.text = { ...params.text, format: options.responseFormat };
+	}
 
 	let trailingScaffoldingItems = 0;
 	if (options?.forceReasoningOff && model.compat.requiresReasoningOffJuiceInstruction) {

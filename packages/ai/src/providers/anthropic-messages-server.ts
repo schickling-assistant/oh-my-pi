@@ -31,6 +31,7 @@ import {
 	anthropicMessagesRequestSchema,
 } from "./anthropic-messages-server-schema";
 import { isAnthropicServerToolHistoryBlock, THINKING_BINDING_CONTROLS_BETA } from "./anthropic-wire";
+import { parseResponseFormat } from "./response-format";
 
 /**
  * Anthropic Messages API (https://docs.anthropic.com/en/api/messages) ↔ pi-ai
@@ -444,6 +445,9 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	if (data.output_config?.effort) {
 		const mapped = REASONING_EFFORT_BY_WIRE[data.output_config.effort];
 		if (mapped !== undefined) options.reasoning = mapped;
+	}
+	if (data.output_config?.format !== undefined) {
+		options.responseFormat = parseResponseFormat(data.output_config.format, "anthropic");
 	}
 	const cacheRetention = deriveCacheRetention(data);
 	if (cacheRetention !== undefined) options.cacheRetention = cacheRetention;
