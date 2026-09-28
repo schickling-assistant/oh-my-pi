@@ -57,21 +57,28 @@ export function parseResponseFormat(
 	return undefined;
 }
 
+function openAIFormatName(name: string): string {
+	return name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "response";
+}
+
 /**
  * Strict grammar requires every object property, changing optional fields into
  * required nullable ones. Preserve the caller's shape with a non-strict schema.
  */
 export function adaptOpenAIResponseFormat(format: ResponseFormat): ResponseFormat {
-	if (format.type !== "json_schema" || format.strict !== true) return format;
+	if (format.type !== "json_schema") return format;
+	const name = openAIFormatName(format.name);
+	const namedFormat = name === format.name ? format : { ...format, name };
+	if (namedFormat.strict !== true) return namedFormat;
 	if (
-		validateSchemaCompatibility(format.schema, "openai-strict").violations.some(
+		validateSchemaCompatibility(namedFormat.schema, "openai-strict").violations.some(
 			violation => violation.rule === "strict-object-required",
 		)
 	) {
-		return { ...format, strict: false };
+		return { ...namedFormat, strict: false };
 	}
-	const adapted = adaptSchemaForStrict(format.schema, true);
-	return { ...format, schema: adapted.schema, strict: adapted.strict };
+	const adapted = adaptSchemaForStrict(namedFormat.schema, true);
+	return { ...namedFormat, schema: adapted.schema, strict: adapted.strict };
 }
 
 export function toChatResponseFormat(input: ResponseFormat) {
