@@ -24,6 +24,9 @@
 ### Changed
 
 - Improved Anthropic prompt caching for long conversations, reducing memory usage while selecting cache breakpoints.
+### Added
+
+- Added native JSON Schema output through the auth-gateway for Anthropic Messages and OpenAI-family APIs, with provider-specific schema adaptation ([PR link to add after creation] by [@schickling-assistant](https://github.com/schickling-assistant)).
 
 ### Fixed
 
