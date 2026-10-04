@@ -3154,6 +3154,8 @@ export class SessionManager {
 	 * Set the session display name.
 	 * @param source "user" for explicit renames; "auto" for generated titles.
 	 *   Auto titles are ignored once the user has set a name.
+	 *   Reapplying the current cleaned title succeeds without changing its source
+	 *   or persisting another title change.
 	 */
 	async setSessionName(name: string, source: SessionTitleSource = "auto", trigger?: string): Promise<boolean> {
 		if (this.#released) return false;
@@ -3161,6 +3163,7 @@ export class SessionManager {
 
 		const title = SessionManager.#cleanTitle(name);
 		if (!title) return false;
+		if (title === this.#sessionName) return true;
 
 		const previousTitle = this.#sessionName;
 		const timestamp = nowIso();

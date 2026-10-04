@@ -171,6 +171,42 @@ describe("session title source persistence", () => {
 		await session.close();
 	});
 
+	it.each(["auto", "user"] as const)("does not rewrite a replayed %s title after reopening", async source => {
+		const session = SessionManager.create(cwd);
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		await session.setSessionName("Existing title", source);
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const sessionFile = session.getSessionFile()!;
+		await session.close();
+
+		const storage = new CountingTitleSlotStorage();
+		const reopened = await SessionManager.open(sessionFile, undefined, storage);
+		const before = await Bun.file(sessionFile).text();
+		const revision = reopened.titleRevision;
+		const names: Array<string | undefined> = [];
+		const unsubscribe = reopened.onSessionNameChanged(() => names.push(reopened.getSessionName()));
+		storage.resetCounts();
+		try {
+			await expect(reopened.setSessionName("Existing title", "user")).resolves.toBe(true);
+			await reopened.flush();
+			expect(await Bun.file(sessionFile).text()).toBe(before);
+			expect(storage.titleUpdates).toBe(0);
+			expect(storage.syncWrites).toBe(0);
+			expect(storage.atomicWrites).toBe(0);
+			expect(reopened.titleSource).toBe(source);
+			expect(reopened.titleRevision).toBe(revision);
+			expect(names).toEqual([]);
+			const entries = await loadEntriesFromFile(sessionFile);
+			expect(entries.filter(entry => entry.type === TITLE_CHANGE_ENTRY_TYPE).map(entry => entry.title)).toEqual([
+				"Existing title",
+			]);
+		} finally {
+			unsubscribe();
+			await reopened.close();
+		}
+	});
+
 	it("notifies name-change subscribers only after successful applied names", async () => {
 		const session = SessionManager.inMemory(cwd);
 		const names: Array<string | undefined> = [];
