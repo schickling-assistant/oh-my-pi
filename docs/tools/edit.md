@@ -132,13 +132,30 @@ MV lib/welcome.py
 
 The mode prompts in `crates/pi-edit/prompts/` define the full syntax.
 
+`apply_patch` matches complete old/context lines in this order: exact, trailing
+whitespace trimmed, both ends trimmed, then Unicode punctuation normalized.
+It never uses substring or character-similarity matching, regardless of the
+fuzzy settings for other modes. Repeated context binds to the first match at
+or after the previous hunk; unmatched context rejects the entire envelope
+before any writes. Numeric prefixes in old and new lines remain literal text,
+not recovered line-number annotations.
+
+An `*** Update File` followed only by `*** Move to:` renames a UTF-8 file
+without changing its bytes or permissions. An empty update without a move
+still rejects, as do missing sources and occupied destinations.
+
+Envelope sections see the results of earlier sections in order. A move vacates
+its source before a later add, and subsequent updates can target the moved
+file. Preview and application validate this same virtual namespace before
+the first filesystem write; a later invalid section leaves all files unchanged.
+
 ## Output and side effects
 
 Hashline applies in one tool call; it does not use the staged `xd://resolve` / `xd://reject` flow used by `ast_edit`.
 
 A successful hashline section returns a fresh `[path#TAG]` header, optional block-resolution and move lines, a compact post-edit preview when available, and a `Warnings:` block when recovery or normalization produced warnings. `EditToolDetails` can include the unified `diff`, `firstChangedLine`, diagnostics, operation (`update` or `delete` in hashline mode), path/move metadata, `oldText` / `newText`, `snapshotsPruned`, and per-file results. Multi-section input returns one aggregate result. Stored before/after snapshot text is capped at 32,768 characters per file and across a multi-file result; later entries may retain their diff but omit snapshot text.
 
-Native parse/match/application and writer failures return `isError: true` with their diagnostic text; native bridge failures may throw. Updates run through the ACP bridge or LSP writethrough, so configured formatting can change the persisted text. A newly introduced syntax parse failure does not roll back the edit: it produces a warning, or an additional repair note when `edit.autoRepair.enabled` successfully repairs it.
+Native parse/match/application and writer failures return `isError: true` with their diagnostic text and `details.errorKind`, the engine's class of the failure: `unseen_lines`, `stale_tag`, `unknown_tag`, `other_file_tag` (a tag this session issued for another file), `missing_tag`, `header_only`, `out_of_range`, `ambiguous_boundary`, `no_change`, `file_not_found`, `parse`, `no_match`, `invalid_utf8`, `plan_mode`, `unresolved_url`, `io`, `write_failed`, or `apply` for the rest; a file's failure in a multi-file call keeps its own class, and `/session` counts failed edits by it. Native bridge failures may throw. Updates run through the ACP bridge or LSP writethrough, so configured formatting can change the persisted text. A newly introduced syntax parse failure does not roll back the edit: it produces a warning, or an additional repair note when `edit.autoRepair.enabled` successfully repairs it.
 
 The streaming renderer parses complete portions of an in-flight payload and computes read-only diffs. Streaming preview skips transient unresolved blocks, stale tags, and empty pastes rather than presenting partial input as a final failure. Execution re-reads and validates normally.
 
