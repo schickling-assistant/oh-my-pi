@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed Python eval dropping caller identity and CLI configuration environment variables that are available to the bash tool; the existing API credential denylist still applies.
+- Fixed Python eval losing caller identity and CLI configuration available to the bash tool; common API credentials remain excluded
 - Fixed `/goal pause` leaving the `goal` tool active; pausing now restores the toolset from before the goal started ([#15753](https://github.com/can1357/oh-my-pi/pull/15753) by [@Shadorain](https://github.com/Shadorain))
 - Fixed `/live` flipping between `listening` and `speaking` at every pause in the assistant's speech; `speaking` now holds through short pauses ([#17114](https://github.com/can1357/oh-my-pi/issues/17114))
 - Fixed the `workflowz` notice showing Python call forms in JS-only sessions and describing keep-alive workers when `eval.workpool.freshAgents` is on ([#17152](https://github.com/can1357/oh-my-pi/pull/17152) by [@bigHippoZz](https://github.com/bigHippoZz))
