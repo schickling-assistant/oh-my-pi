@@ -160,6 +160,15 @@ The credential denylist always wins, even when a credential matches a configured
 name or prefix. Only select variables you intend Python and its subprocesses to
 receive; custom secret names are not automatically detected.
 
+This option follows the normal loaded settings precedence: active profile/global
+configuration, project configuration, `--config` overlays, and runtime overrides.
+It is not restricted to user/global configuration: a project's
+`<cwd>/.omp/config.yml` can expand which caller variables Python inherits.
+Review project settings before launching OMP with a sensitive environment;
+project-controlled names or prefixes can expose custom credentials that are
+outside the fixed denylist. There is no dedicated environment-variable override
+for this setting.
+
 The same option applies to IDA's Python runtime, which shares the filter.
 Restart OMP after changing it so cached runtimes and existing kernels use the
 new configuration. JavaScript environment inheritance is unchanged.
