@@ -126,10 +126,24 @@ export interface PythonRuntime {
 }
 
 /**
- * Filter environment variables to a safe allowlist for Python subprocesses.
- * Removes sensitive API keys and limits to known-safe variables.
+ * Filter environment variables to the Python allowlist and explicit passthrough.
+ * Sensitive API credentials are denied even when selected by passthrough.
  */
-export function filterEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
+export function filterEnv(
+	env: Record<string, string | undefined>,
+	passthrough: readonly string[] = [],
+): Record<string, string | undefined> {
+	const extraNames = new Set<string>();
+	const extraPrefixes: string[] = [];
+	for (const entry of passthrough) {
+		const pattern = normalizeEnvKey(entry.trim());
+		if (!pattern || pattern === "*") continue;
+		if (pattern.endsWith("*")) {
+			extraPrefixes.push(pattern.slice(0, -1));
+		} else {
+			extraNames.add(pattern);
+		}
+	}
 	const filtered: Record<string, string | undefined> = {};
 	for (const [key, value] of Object.entries(env)) {
 		if (value === undefined) continue;
@@ -140,7 +154,11 @@ export function filterEnv(env: Record<string, string | undefined>): Record<strin
 			filtered[destKey] = value;
 			continue;
 		}
-		if (NORMALIZED_ALLOW_PREFIXES.some(prefix => normalizedKey.startsWith(prefix))) {
+		if (
+			NORMALIZED_ALLOW_PREFIXES.some(prefix => normalizedKey.startsWith(prefix)) ||
+			extraNames.has(normalizedKey) ||
+			extraPrefixes.some(prefix => normalizedKey.startsWith(prefix))
+		) {
 			filtered[key] = value;
 		}
 	}

@@ -8,6 +8,7 @@ import {
 	type PythonRuntime,
 	resolveExplicitPythonRuntime,
 } from "../eval/py/runtime";
+import { cfgPythonEnvPassthrough } from "../eval/settings";
 import type { ToolSession } from "../tools";
 import { cfgIdaInstall } from "./install";
 import { cfgIdaPython } from "./settings";
@@ -56,7 +57,8 @@ export function resolveIdaRuntime(session: ToolSession): Promise<IdaRuntime> {
 }
 
 async function probeIdaRuntime(python: string | undefined, installDir: string, cwd: string): Promise<IdaRuntime> {
-	const baseEnv = filterEnv((await Settings.init()).getShellConfig().env);
+	const settings = await Settings.init();
+	const baseEnv = filterEnv(settings.getShellConfig().env, cfgPythonEnvPassthrough.get(settings));
 	const candidates: PythonRuntime[] = python
 		? [resolveExplicitPythonRuntime(python, cwd, baseEnv)]
 		: enumeratePythonRuntimes(cwd, baseEnv);

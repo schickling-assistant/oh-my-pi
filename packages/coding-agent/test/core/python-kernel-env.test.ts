@@ -2,15 +2,26 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	enumeratePythonRuntimes,
 	filterEnv,
 	resolveExplicitPythonRuntime,
 	resolvePythonRuntime,
 } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import { cfgPythonEnvPassthrough } from "@oh-my-pi/pi-coding-agent/eval/settings";
 import * as piUtils from "@oh-my-pi/pi-utils";
 
 describe("Python gateway environment filtering", () => {
+	it("loads passthrough through Python settings without changing its default", () => {
+		expect(cfgPythonEnvPassthrough.get(Settings.isolated())).toEqual([]);
+		const settings = Settings.isolated({ "python.envPassthrough": ["AGENT_*", "GIT_CONFIG_GLOBAL"] });
+		expect(cfgPythonEnvPassthrough.get(settings)).toEqual(["AGENT_*", "GIT_CONFIG_GLOBAL"]);
+		expect(() => Settings.isolated({ "python.envPassthrough": [42] })).toThrow(
+			"python.envPassthrough must be an array",
+		);
+	});
+
 	it("filters sensitive and unknown variables from shell env", () => {
 		const env: Record<string, string | undefined> = {
 			PATH: "/bin",
@@ -33,6 +44,66 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.OPENAI_API_KEY).toBeUndefined();
 		expect(filtered.ANTHROPIC_API_KEY).toBeUndefined();
 		expect(filtered.UNSAFE_TOKEN).toBeUndefined();
+	});
+
+	it("passes only explicitly listed caller variables beyond the default allowlist", () => {
+		const env = { PATH: "/bin", AGENT_ID: "example-agent", GIT_CONFIG_GLOBAL: "/tmp/gitconfig", OTHER: "hidden" };
+		expect(filterEnv(env)).toEqual({ PATH: "/bin" });
+		expect(filterEnv(env, ["AGENT_ID", "GIT_CONFIG_GLOBAL"])).toEqual({
+			PATH: "/bin",
+			AGENT_ID: "example-agent",
+			GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+		});
+	});
+
+	it("matches trailing-star prefixes without enabling unrelated names", () => {
+		expect(
+			filterEnv({ AGENT_ID: "example-agent", AGENT_SESSION: "example-session", AGENT: "hidden", OTHER: "hidden" }, [
+				"AGENT_*",
+			]),
+		).toEqual({ AGENT_ID: "example-agent", AGENT_SESSION: "example-session" });
+	});
+
+	it("ignores empty entries and a bare wildcard", () => {
+		expect(filterEnv({ AGENT_ID: "hidden" }, ["", " ", "*", " * "])).toEqual({});
+	});
+
+	it("keeps the credential denylist ahead of exact and prefix passthrough", () => {
+		const credentials = [
+			"OPENAI_API_KEY",
+			"ANTHROPIC_API_KEY",
+			"GOOGLE_API_KEY",
+			"GEMINI_API_KEY",
+			"OPENROUTER_API_KEY",
+			"PERPLEXITY_API_KEY",
+			"PERPLEXITY_COOKIES",
+			"EXA_API_KEY",
+			"AZURE_OPENAI_API_KEY",
+			"MISTRAL_API_KEY",
+		];
+		const env = Object.fromEntries(credentials.map(name => [name, "secret"]));
+		expect(filterEnv(env, credentials)).toEqual({});
+		expect(
+			filterEnv(
+				env,
+				credentials.map(name => `${name.split("_")[0]}_*`),
+			),
+		).toEqual({});
+	});
+
+	it("omits undefined passthrough values while preserving empty strings and caller input", () => {
+		const env = { AGENT_ID: "", AGENT_SESSION: undefined };
+		expect(filterEnv(env, ["AGENT_*"])).toEqual({ AGENT_ID: "" });
+		expect(Object.hasOwn(env, "AGENT_SESSION")).toBe(true);
+	});
+
+	it("uses platform-specific case matching for passthrough without renaming variables", () => {
+		const env = { Agent_Id: "example-agent" };
+		expect(filterEnv(env, ["AGENT_ID"])).toEqual(process.platform === "win32" ? env : {});
+		expect(filterEnv(env, ["AGENT_*"])).toEqual(process.platform === "win32" ? env : {});
+		expect(filterEnv({ openai_api_key: "secret" }, ["openai_api_key"])).toEqual(
+			process.platform === "win32" ? {} : { openai_api_key: "secret" },
+		);
 	});
 
 	it("preserves XDG and LC prefixed variables", () => {

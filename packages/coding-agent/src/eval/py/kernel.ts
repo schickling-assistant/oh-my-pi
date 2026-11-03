@@ -19,6 +19,7 @@ import {
 } from "../kernel-base";
 import { type BackendProbeOptions, probeCandidates } from "../probe";
 import { stageRunnerScript } from "../runner-cache";
+import { cfgPythonEnvPassthrough } from "../settings";
 import type { ShadowPlan } from "../speculation/types";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
@@ -162,7 +163,7 @@ async function probePythonKernelAvailability(
 	try {
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
-		const baseEnv = filterEnv(env);
+		const baseEnv = filterEnv(env, cfgPythonEnvPassthrough.get(settings));
 		const runtimes = interpreter
 			? [resolveExplicitPythonRuntime(interpreter, cwd, baseEnv)]
 			: enumeratePythonRuntimes(cwd, baseEnv);
@@ -317,10 +318,11 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 
 		let runtime = availability.runtime;
 		if (!runtime) {
-			const { env: shellEnv } = (await Settings.init()).getShellConfig();
+			const settings = await Settings.init();
+			const baseEnv = filterEnv(settings.getShellConfig().env, cfgPythonEnvPassthrough.get(settings));
 			runtime = options.interpreter
-				? resolveExplicitPythonRuntime(options.interpreter, options.cwd, filterEnv(shellEnv))
-				: resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
+				? resolveExplicitPythonRuntime(options.interpreter, options.cwd, baseEnv)
+				: resolvePythonRuntime(options.cwd, baseEnv);
 		}
 		const spawnEnv: Record<string, string> = {};
 		for (const [key, value] of Object.entries(runtime.env)) {

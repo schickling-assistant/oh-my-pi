@@ -143,6 +143,27 @@ Environment is filtered before launching the runner:
 - Allow-prefixes: `LC_`, `XDG_`, `PI_`
 - Denylist strips common API keys (OpenAI/Anthropic/Gemini/etc.)
 
+`python.envPassthrough` (default `[]`) extends the allowlist with explicit caller
+variable names or trailing-`*` prefixes. For example, in settings:
+
+```yaml
+python:
+  envPassthrough:
+    - GIT_CONFIG_GLOBAL
+    - AGENT_*
+```
+
+This preserves Git configuration and caller identity variables without changing
+the default filtering policy. Matching is case-sensitive except on Windows.
+Only a trailing `*` is a prefix wildcard; empty entries and a bare `*` are ignored.
+The credential denylist always wins, even when a credential matches a configured
+name or prefix. Only select variables you intend Python and its subprocesses to
+receive; custom secret names are not automatically detected.
+
+The same option applies to IDA's Python runtime, which shares the filter.
+Restart OMP after changing it so cached runtimes and existing kernels use the
+new configuration. JavaScript environment inheritance is unchanged.
+
 Runtime selection order (skipped entirely when the `python.interpreter` setting names an explicit executable):
 
 1. Active/located venv (`VIRTUAL_ENV`, then `CONDA_PREFIX`, then `<cwd>/.venv`, `<cwd>/venv`)

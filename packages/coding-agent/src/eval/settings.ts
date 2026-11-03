@@ -114,3 +114,21 @@ export const cfgPythonInterpreter = register({
 			"Optional path to an exact Python executable. When set, automatic Python runtime discovery is skipped.",
 	},
 });
+
+export const cfgPythonEnvPassthrough = register({
+	id: "python.envPassthrough",
+	type: "array",
+	default: [] as string[],
+	validate: raw => {
+		if (!Array.isArray(raw) || raw.some(entry => typeof entry !== "string")) {
+			throw new TypeError("python.envPassthrough must be an array of environment variable names or prefixes");
+		}
+	},
+	ui: {
+		tab: "shell",
+		group: "Eval & Runtimes",
+		label: "Python Environment Passthrough",
+		description: "Extra environment names or trailing-* prefixes to inherit; denied API credentials remain blocked",
+		editor: "json",
+	},
+});
