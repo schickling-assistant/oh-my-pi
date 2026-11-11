@@ -239,25 +239,31 @@ export function hasAvailablePlanUsage(
 ): boolean {
 	if (!report) return false;
 	const windows = reserveUsageLimits(strategy, report, context).filter(limit => limit.amount.unit !== "credits");
-	return windows.length > 0 && windows.every(limit => {
-		if (!limit.window) return false;
-		const resetsAt = limit.window.resetsAt;
-		// Header merges can refresh report.fetchedAt while retaining an old window.
-		if (resetsAt !== undefined && (!Number.isFinite(resetsAt) || resetsAt <= nowMs)) return false;
-		const amount = limit.amount;
-		const used = resolveUsedFraction(limit);
-		return (
-			used !== undefined && Number.isFinite(used) && used >= 0 && used < 1 &&
-			limit.status !== "exhausted" &&
-			(amount.used === undefined || Number.isFinite(amount.used)) &&
-			(amount.limit === undefined || (Number.isFinite(amount.limit) && amount.limit > 0)) &&
-			(amount.used === undefined || amount.limit === undefined || amount.used < amount.limit) &&
-			(amount.unit !== "percent" || amount.used === undefined || amount.used < 100) &&
-			(amount.remaining === undefined || (Number.isFinite(amount.remaining) && amount.remaining > 0)) &&
-			(amount.remainingFraction === undefined ||
-				(Number.isFinite(amount.remainingFraction) && amount.remainingFraction > 0))
-		);
-	});
+	return (
+		windows.length > 0 &&
+		windows.every(limit => {
+			if (!limit.window) return false;
+			const resetsAt = limit.window.resetsAt;
+			// Header merges can refresh report.fetchedAt while retaining an old window.
+			if (resetsAt !== undefined && (!Number.isFinite(resetsAt) || resetsAt <= nowMs)) return false;
+			const amount = limit.amount;
+			const used = resolveUsedFraction(limit);
+			return (
+				used !== undefined &&
+				Number.isFinite(used) &&
+				used >= 0 &&
+				used < 1 &&
+				limit.status !== "exhausted" &&
+				(amount.used === undefined || Number.isFinite(amount.used)) &&
+				(amount.limit === undefined || (Number.isFinite(amount.limit) && amount.limit > 0)) &&
+				(amount.used === undefined || amount.limit === undefined || amount.used < amount.limit) &&
+				(amount.unit !== "percent" || amount.used === undefined || amount.used < 100) &&
+				(amount.remaining === undefined || (Number.isFinite(amount.remaining) && amount.remaining > 0)) &&
+				(amount.remainingFraction === undefined ||
+					(Number.isFinite(amount.remainingFraction) && amount.remainingFraction > 0))
+			);
+		})
+	);
 }
 
 /** Measure currently available quota outside expired windows. */

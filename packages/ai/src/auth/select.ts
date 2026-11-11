@@ -1120,7 +1120,8 @@ export class CredentialSelector {
 			if (
 				requiresPlanUsage(selection.credential) &&
 				!hasAvailablePlanUsage(usageStrategy, usage, usageContext, Date.now())
-			) return undefined;
+			)
+				return undefined;
 			if (applyPlanFilter && planGate?.(usage) !== true) {
 				return undefined;
 			}
@@ -1195,10 +1196,8 @@ export class CredentialSelector {
 					});
 					usageChecked = true;
 				}
-				if (
-					requiresPlanUsage(updated) &&
-					!hasAvailablePlanUsage(usageStrategy, usage, usageContext, Date.now())
-				) return undefined;
+				if (requiresPlanUsage(updated) && !hasAvailablePlanUsage(usageStrategy, usage, usageContext, Date.now()))
+					return undefined;
 				if (applyPlanFilter && planGate?.(usage) !== true) {
 					return undefined;
 				}

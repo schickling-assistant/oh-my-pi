@@ -316,9 +316,7 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 
 	test("default and explicit true preserve credit-funded exhausted-window routing", async () => {
 		for (const allowCreditOverage of [undefined, true]) {
-			const auth = await setup(C, [
-				{ provider: C, account: { accountId: "a" }, allowCreditOverage },
-			], ["a"]);
+			const auth = await setup(C, [{ provider: C, account: { accountId: "a" }, allowCreditOverage }], ["a"]);
 			creditAdjusted("a", 1, 0.2);
 			expect(await next(auth, C, "default")).toBe("a");
 		}
@@ -356,7 +354,15 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 		});
 	}
 
-	for (const unknown of ["report", "windows", "missing-window", "counter", "nonfinite", "expired", "refreshed-expired"] as const) {
+	for (const unknown of [
+		"report",
+		"windows",
+		"missing-window",
+		"counter",
+		"nonfinite",
+		"expired",
+		"refreshed-expired",
+	] as const) {
 		test(`fails closed with unknown ${unknown}`, async () => {
 			const auth = await setup(C, strict, ["a"]);
 			setUsage(C, "a", 0.1, 0.2);
@@ -381,11 +387,17 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 		usage.get("a")!.limits[1]!.window!.resetsAt = Date.now() + MIN;
 		expect(await next(auth, C, "partial-headers")).toBe("a");
 		clock += 2 * MIN;
-		expect(auth.usage.ingestHeaders(C, {
-			"x-codex-primary-used-percent": "10",
-			"x-codex-primary-window-minutes": "300",
-			"x-codex-primary-reset-at": String(Math.floor((Date.now() + HOUR) / 1000)),
-		}, { sessionId: "partial-headers", responseStatus: 200 })).toBe(true);
+		expect(
+			auth.usage.ingestHeaders(
+				C,
+				{
+					"x-codex-primary-used-percent": "10",
+					"x-codex-primary-window-minutes": "300",
+					"x-codex-primary-reset-at": String(Math.floor((Date.now() + HOUR) / 1000)),
+				},
+				{ sessionId: "partial-headers", responseStatus: 200 },
+			),
+		).toBe(true);
 		expect(await next(auth, C, "partial-headers")).toBeUndefined();
 	});
 
@@ -423,9 +435,15 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 			usageProviderResolver: () => undefined,
 			accountPolicies: [{ provider: "unmetered", account: { accountId: "a" }, allowCreditOverage: false }],
 		});
-		await auth.credentials.set("unmetered", [{
-			type: "oauth", access: "access-a", refresh: "refresh-a", expires: Date.now() + WEEK, accountId: "a",
-		}]);
+		await auth.credentials.set("unmetered", [
+			{
+				type: "oauth",
+				access: "access-a",
+				refresh: "refresh-a",
+				expires: Date.now() + WEEK,
+				accountId: "a",
+			},
+		]);
 		expect(await auth.keys.get("unmetered", "unknown-provider")).toBeUndefined();
 	});
 
@@ -441,24 +459,22 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 	});
 
 	test("refresh cannot return a newly identified strict account using another account's usage", async () => {
-		const auth = await setup(C, [
-			{ provider: C, account: { accountId: "b" }, allowCreditOverage: false },
-		], ["a"]);
+		const auth = await setup(C, [{ provider: C, account: { accountId: "b" }, allowCreditOverage: false }], ["a"]);
 		setUsage(C, "a", 0.1, 0.2);
 		creditAdjusted("b", 1, 0.2);
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, all) => {
 			const credential = all[provider] as OAuthCredentials | undefined;
-			return credential
-				? { apiKey: "api-b", newCredentials: { ...credential, accountId: "b" } }
-				: null;
+			return credential ? { apiKey: "api-b", newCredentials: { ...credential, accountId: "b" } } : null;
 		});
 		expect(await next(auth, C, "refresh-identity")).toBeUndefined();
 	});
 
 	test("preflight identity changes cannot reuse another account's ranked usage", async () => {
-		const auth = await setup(C, [
-			{ provider: C, account: { accountId: "b" }, allowCreditOverage: false },
-		], ["a", "c"]);
+		const auth = await setup(
+			C,
+			[{ provider: C, account: { accountId: "b" }, allowCreditOverage: false }],
+			["a", "c"],
+		);
 		setUsage(C, "a", 0.1, 0.2);
 		setUsage(C, "c", 0.3, 0.4);
 		creditAdjusted("b", 1, 0.2);
