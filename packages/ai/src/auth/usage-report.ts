@@ -241,8 +241,9 @@ export function hasAvailablePlanUsage(
 	const windows = reserveUsageLimits(strategy, report, context).filter(limit => limit.amount.unit !== "credits");
 	return windows.length > 0 && windows.every(limit => {
 		if (!limit.window) return false;
-		const resetsAt = limit.window?.resetsAt;
-		if (resetsAt !== undefined && resetsAt <= nowMs && report.fetchedAt < resetsAt) return false;
+		const resetsAt = limit.window.resetsAt;
+		// Header merges can refresh report.fetchedAt while retaining an old window.
+		if (resetsAt !== undefined && (!Number.isFinite(resetsAt) || resetsAt <= nowMs)) return false;
 		const amount = limit.amount;
 		const used = resolveUsedFraction(limit);
 		return (

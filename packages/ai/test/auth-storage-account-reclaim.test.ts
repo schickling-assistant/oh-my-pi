@@ -354,7 +354,7 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 		});
 	}
 
-	for (const unknown of ["report", "windows", "missing-window", "counter", "nonfinite", "expired"] as const) {
+	for (const unknown of ["report", "windows", "missing-window", "counter", "nonfinite", "expired", "refreshed-expired"] as const) {
 		test(`fails closed with unknown ${unknown}`, async () => {
 			const auth = await setup(C, strict, ["a"]);
 			setUsage(C, "a", 0.1, 0.2);
@@ -368,9 +368,24 @@ describe("accountPolicies allowCreditOverage hard eligibility", () => {
 				report.limits[0]!.window!.resetsAt = Date.now() - 1;
 				report.fetchedAt = Date.now() - MIN;
 			}
+			if (unknown === "refreshed-expired") report.limits[0]!.window!.resetsAt = Date.now() - 1;
 			expect(await next(auth, C, "unknown")).toBeUndefined();
 		});
 	}
+
+	test("partial headers cannot make an unobserved expired weekly window current", async () => {
+		const auth = await setup(C, strict, ["a"]);
+		setUsage(C, "a", 0.1, 0.5);
+		usage.get("a")!.limits[1]!.window!.resetsAt = Date.now() + MIN;
+		expect(await next(auth, C, "partial-headers")).toBe("a");
+		clock += 2 * MIN;
+		expect(auth.usage.ingestHeaders(C, {
+			"x-codex-primary-used-percent": "10",
+			"x-codex-primary-window-minutes": "300",
+			"x-codex-primary-reset-at": String(Math.floor((Date.now() + HOUR) / 1000)),
+		}, { sessionId: "partial-headers", responseStatus: 200 })).toBe(true);
+		expect(await next(auth, C, "partial-headers")).toBeUndefined();
+	});
 
 	test("reset recovery needs raw headroom in every remaining plan window", async () => {
 		const auth = await setup(C, strict, ["a"]);
