@@ -7,6 +7,7 @@ import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { OAuthRefresher } from "../src/auth/refresh";
+import { parseCodexRateLimitHeaders } from "../src/usage/openai-codex";
 
 // Running sessions with a warm automatic pin and `reclaimAbovePct` on the
 // preferred account. The clock advances in short steps so Anthropic pins stay
@@ -64,6 +65,7 @@ async function setup(provider: Provider, policies: AuthAccountPolicies, accounts
 	if (!store) throw new Error("test setup failed");
 	const usageProvider: UsageProvider = {
 		id: provider,
+		parseRateLimitHeaders: provider === "openai-codex" ? parseCodexRateLimitHeaders : undefined,
 		async fetchUsage(params) {
 			const id = params.credential.accountId;
 			return id ? (usage.get(id) ?? null) : null;
