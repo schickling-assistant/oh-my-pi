@@ -40,6 +40,7 @@ import {
 } from "./types";
 import type { UsageService } from "./usage";
 import {
+	hasAvailablePlanUsage,
 	isUsageLimitReached,
 	normalizeUsageFraction,
 	remainingUsageFraction,
@@ -1096,11 +1097,17 @@ export class CredentialSelector {
 		const planGate = providedPlanGate ?? this.#deps.strategies(provider)?.planGate?.({ modelId: options?.modelId });
 		const hasPlanRequirement = planGate !== undefined;
 		const applyPlanFilter = enforcePlanRequirement ?? hasPlanRequirement;
+		// This is hard eligibility, not a ranking hint or a temporary usage block.
+		// All callers (including explicit pins and last-resort passes) meet it.
+		const requiresPlanUsage = (credential: OAuthCredential): boolean =>
+			this.#deps.policies.forCredential(provider, credential)?.allowCreditOverage === false;
+		const usageStrategy = strategy ?? this.#deps.strategies(provider);
+		const usageContext = rankingContext ?? { modelId: options?.modelId };
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
-			if (usagePrechecked) {
+		if ((checkUsage && !allowBlocked) || hasPlanRequirement || requiresPlanUsage(selection.credential)) {
+			if (usagePrechecked && !requiresPlanUsage(selection.credential)) {
 				usage = prefetchedUsage;
 				usageChecked = true;
 			} else {
@@ -1110,6 +1117,10 @@ export class CredentialSelector {
 				});
 				usageChecked = true;
 			}
+			if (
+				requiresPlanUsage(selection.credential) &&
+				!hasAvailablePlanUsage(usageStrategy, usage, usageContext, Date.now())
+			) return undefined;
 			if (applyPlanFilter && planGate?.(usage) !== true) {
 				return undefined;
 			}
@@ -1170,8 +1181,13 @@ export class CredentialSelector {
 				const rowId = this.#deps.pool.entries(provider)[selection.index]?.id;
 				if (rowId !== undefined) this.#deps.pool.replaceById(provider, rowId, updated);
 			}
-			if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
-				const sameAccount = selection.credential.accountId === updated.accountId;
+			if ((checkUsage && !allowBlocked) || hasPlanRequirement || requiresPlanUsage(updated)) {
+				const sameAccount =
+					selection.credential.accountId === updated.accountId &&
+					(!requiresPlanUsage(updated) ||
+						(selection.credential.email === updated.email &&
+							selection.credential.projectId === updated.projectId &&
+							selection.credential.orgId === updated.orgId));
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#deps.usage.report(provider, updated, {
 						...options,
@@ -1179,6 +1195,10 @@ export class CredentialSelector {
 					});
 					usageChecked = true;
 				}
+				if (
+					requiresPlanUsage(updated) &&
+					!hasAvailablePlanUsage(usageStrategy, usage, usageContext, Date.now())
+				) return undefined;
 				if (applyPlanFilter && planGate?.(usage) !== true) {
 					return undefined;
 				}

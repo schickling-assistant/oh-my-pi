@@ -227,6 +227,38 @@ export function reserveUsageLimits(
 	});
 }
 
+/**
+ * Hard no-credit eligibility uses raw plan counters, not credit-adjusted status.
+ * A missing, unknown, or stale window cannot prove that a request stays in-plan.
+ */
+export function hasAvailablePlanUsage(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport | null,
+	context: CredentialRankingContext,
+	nowMs: number,
+): boolean {
+	if (!report) return false;
+	const windows = reserveUsageLimits(strategy, report, context).filter(limit => limit.amount.unit !== "credits");
+	return windows.length > 0 && windows.every(limit => {
+		if (!limit.window) return false;
+		const resetsAt = limit.window?.resetsAt;
+		if (resetsAt !== undefined && resetsAt <= nowMs && report.fetchedAt < resetsAt) return false;
+		const amount = limit.amount;
+		const used = resolveUsedFraction(limit);
+		return (
+			used !== undefined && Number.isFinite(used) && used >= 0 && used < 1 &&
+			limit.status !== "exhausted" &&
+			(amount.used === undefined || Number.isFinite(amount.used)) &&
+			(amount.limit === undefined || (Number.isFinite(amount.limit) && amount.limit > 0)) &&
+			(amount.used === undefined || amount.limit === undefined || amount.used < amount.limit) &&
+			(amount.unit !== "percent" || amount.used === undefined || amount.used < 100) &&
+			(amount.remaining === undefined || (Number.isFinite(amount.remaining) && amount.remaining > 0)) &&
+			(amount.remainingFraction === undefined ||
+				(Number.isFinite(amount.remainingFraction) && amount.remainingFraction > 0))
+		);
+	});
+}
+
 /** Measure currently available quota outside expired windows. */
 export function remainingUsageFraction(
 	strategy: CredentialRankingStrategy | undefined,

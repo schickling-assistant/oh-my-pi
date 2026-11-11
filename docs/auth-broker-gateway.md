@@ -355,6 +355,27 @@ The gateway uses the same broker URL/token resolution and account-pool environme
 
 Broker connection values come from the agent's main config file, not project settings. Account policies/reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy changes and can replace the credential store in place when effective broker settings change; failed changes leave the current store active.
 
+Set `allowCreditOverage: false` on an account policy to prohibit routing when
+its request-scoped raw plan windows are exhausted or unknown. The default is
+`true`, preserving normal credit-funded overage behavior. This is a hard
+eligibility constraint: account priority, explicit or automatic session pins,
+retry/blocked-account fallback, and saved-reset recovery cannot override it.
+Credit balances and credit-adjusted `allowed`/window status do not establish
+plan headroom. Missing reports, missing plan windows, unknown counters, or stale
+windows whose reset has passed fail closed until known in-plan usage is available.
+Account-specific credential resolution also enforces this constraint, including
+the credential access used by saved-reset operations.
+
+```yaml
+auth:
+  accountPolicies:
+    - provider: openai-codex
+      account:
+        email: personal@example.com
+      allowCreditOverage: false
+```
+
+
 #### How sessions choose and keep an account
 
 When a provider has account policies, OMP ranks its accounts whenever it selects or reconsiders one (not on every request: a warm explicit pin, or a sole account, skips ranking). In order, an account loses when it is blocked (hit a limit), outside a required plan, past its renewable allowance, or inside its reserve; then Codex accounts with an untouched 5-hour window are preferred, accounts whose 5-hour window is at least 85% used fall back, and then higher `priority` wins. Within one priority, accounts with a usage report beat accounts whose report could not be fetched. Ties go to the account whose quota would otherwise expire unused soonest. So `priority` orders healthy accounts, including one whose usage report is momentarily missing; it does not override blocks, reserve or the other checks before it. Reserve, spent allowance and the hot-window check need a usage report, so an account without one is held to them again once its report returns; blocks apply either way.

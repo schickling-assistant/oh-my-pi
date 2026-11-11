@@ -127,7 +127,8 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 				key !== "account" &&
 				key !== "priority" &&
 				key !== "reservePct" &&
-				key !== "reclaimAbovePct",
+				key !== "reclaimAbovePct" &&
+				key !== "allowCreditOverage",
 		);
 		if (unknownPolicyFields.length > 0) {
 			throw new AIError.ConfigurationError(`${path} has unknown fields: ${unknownPolicyFields.join(", ")}`);
@@ -182,6 +183,9 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 		) {
 			throw new AIError.ConfigurationError(`${path}.reclaimAbovePct must be a finite number`);
 		}
+		if (policy.allowCreditOverage !== undefined && typeof policy.allowCreditOverage !== "boolean") {
+			throw new AIError.ConfigurationError(`${path}.allowCreditOverage must be a boolean`);
+		}
 
 		return {
 			provider,
@@ -194,6 +198,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			...(typeof policy.priority === "number" ? { priority: policy.priority } : {}),
 			...(typeof policy.reservePct === "number" ? { reservePct: policy.reservePct } : {}),
 			...(typeof policy.reclaimAbovePct === "number" ? { reclaimAbovePct: policy.reclaimAbovePct } : {}),
+			...(typeof policy.allowCreditOverage === "boolean" ? { allowCreditOverage: policy.allowCreditOverage } : {}),
 		};
 	});
 }

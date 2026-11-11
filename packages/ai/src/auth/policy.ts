@@ -87,6 +87,9 @@ export class AccountPolicies {
 					throw new AIError.ConfigurationError(`${path}.account.${field} must be a non-empty string`);
 				}
 			}
+			if (policy.allowCreditOverage !== undefined && typeof policy.allowCreditOverage !== "boolean") {
+				throw new AIError.ConfigurationError(`${path}.allowCreditOverage must be a boolean`);
+			}
 			if (policy.priority !== undefined && !Number.isFinite(policy.priority)) {
 				throw new AIError.ConfigurationError(`${path}.priority must be a finite number`);
 			}

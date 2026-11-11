@@ -64,6 +64,8 @@ export interface AuthAccountPolicy {
 	readonly reservePct?: number;
 	/** Remaining quota percentage, above the reserve, at which this account takes back lower-priority warm pins. */
 	readonly reclaimAbovePct?: number;
+	/** Defaults to true. False requires known, unexhausted raw plan windows before routing. */
+	readonly allowCreditOverage?: boolean;
 }
 
 /** Read-only set of per-account routing policies. */
