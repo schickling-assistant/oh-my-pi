@@ -10,6 +10,7 @@
 ### Fixed
 
 - Preserve the causing Claude quota in dedicated `quota:anthropic:*` block scopes. Fresh endpoint usage below 100% at the same or a later reset identity heals only that quota, including saved weekly resets while 5-hour usage is unreported. Reactive retry-after, authentication and legacy unknown blocks retain their existing safeguards; explicit saved resets clear only declared quota scopes.
+- Keep writing the original global/tier exhaustion row for older clients and broker projections during mixed-version rollout. A new client heals that mirror only when all provenance siblings at its deadline independently prove recovery; legacy-only rows retain the complete-shared-gate guard, and any shorter independent quota wall stays mirrored.
 
 ## [18.12.5] - 2026-10-21
 

@@ -157,7 +157,8 @@ describe("claude usage-block healing", () => {
 			await h.storage.credentials.reload();
 			expect(await h.storage.keys.get("anthropic", "weekly-spent", { modelId: "claude-opus-5-5" })).toBe("access-2");
 			expect(h.blocks.get("1:quota:anthropic:7d")).toBe(weekly.window?.resetsAt);
-			expect(h.blocks.has("1:")).toBe(false);
+			// A base-version reader asks only for the global row, never quota:*.
+			expect(h.blocks.get("1:")).toBe(weekly.window?.resetsAt);
 			h.setReport(claudeReport([{ ...weekly, amount: { usedFraction: 0.06, unit: "percent" }, status: "ok" }]));
 			await h.storage.health.model("anthropic", { modelId: "claude-opus-5-5", reserveFraction: 0.1 });
 			expect(h.blocks.has("1:quota:anthropic:7d")).toBe(true);
@@ -165,7 +166,8 @@ describe("claude usage-block healing", () => {
 			clock.mockReturnValue(now + 6 * 60_000);
 			h.setReport(claudeReport([{ ...weekly, amount: { usedFraction: 0.06, unit: "percent" }, status: "ok" }]));
 			expect(await h.storage.keys.get("anthropic", "weekly-restored", { modelId: "claude-opus-5-5" })).toBe("access-1");
-			expect(h.clearedScopes).toEqual(["quota:anthropic:7d"]);
+			expect(h.clearedScopes).toEqual(["", "quota:anthropic:7d"]);
+			expect(h.blocks.has("1:")).toBe(false);
 			expect(h.blocks.has("1:quota:anthropic:7d")).toBe(false);
 		} finally {
 			clock.mockRestore();
@@ -190,9 +192,51 @@ describe("claude usage-block healing", () => {
 			expect(await h.storage.keys.get("anthropic", "weekly-only-restored", { modelId: "claude-opus-5-5" })).toBe("access-2");
 			expect(h.blocks.has("1:quota:anthropic:7d")).toBe(false);
 			expect(h.blocks.has("1:quota:anthropic:5h")).toBe(true);
+			expect(h.blocks.has("1:")).toBe(true);
 		} finally {
 			clock.mockRestore();
 		}
+	});
+
+	for (const legacyScope of ["", "tier:fable"]) {
+		it(`requires every matching provenance sibling before healing legacy ${legacyScope || "global"} readers`, async () => {
+			const weekly = sharedLimit("7d", "7d", 0.06);
+			const deadline = weekly.window!.resetsAt!;
+			const h = makeHarness(claudeReport([weekly]), legacyScope);
+			storages.push(h.storage);
+			h.blocks.set(`1:${legacyScope}`, deadline);
+			h.blocks.set("1:quota:anthropic:7d", deadline);
+			h.blocks.set("1:quota:anthropic:5h", deadline);
+			await h.storage.credentials.reload();
+			await h.storage.health.model("anthropic", { modelId: "claude-fable-5-1", reserveFraction: 0.1 });
+			expect(h.blocks.has(`1:${legacyScope}`)).toBe(true);
+			expect(h.blocks.has("1:quota:anthropic:5h")).toBe(true);
+			expect(h.blocks.has("1:quota:anthropic:7d")).toBe(false);
+		});
+	}
+
+	it("preserves a shorter independent quota wall in the legacy mirror after healing its longest deadline", async () => {
+		const weekly = sharedLimit("7d", "7d", 0.06);
+		const deadline = weekly.window!.resetsAt!;
+		const h = makeHarness(claudeReport([weekly]), "");
+		storages.push(h.storage);
+		h.blocks.set("1:", deadline);
+		h.blocks.set("1:quota:anthropic:7d", deadline);
+		h.blocks.set("1:quota:anthropic:5h", deadline - 60_000);
+		await h.storage.credentials.reload();
+		await h.storage.health.model("anthropic", { modelId: "claude-opus-5-5", reserveFraction: 0.1 });
+		expect(h.blocks.get("1:")).toBe(deadline - 60_000);
+		expect(h.blocks.has("1:quota:anthropic:5h")).toBe(true);
+		expect(h.blocks.has("1:quota:anthropic:7d")).toBe(false);
+	});
+
+	it("does not heal a legacy-only block from weekly recovery with 5h unreported", async () => {
+		const h = makeHarness(claudeReport([sharedLimit("7d", "7d", 0.06)]), "");
+		storages.push(h.storage);
+		await h.storage.credentials.reload();
+		await h.storage.health.model("anthropic", { modelId: "claude-opus-5-5", reserveFraction: 0.1 });
+		expect(h.blocks.has("1:")).toBe(true);
+		expect(h.clearedScopes).toEqual([]);
 	});
 
 	for (const protectedScope of ["quota:anthropic:5h", "", "auth", "tier:fable"]) {

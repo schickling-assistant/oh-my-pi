@@ -914,6 +914,11 @@ export function claudeQuotaBlockScope(limitId: string): string | undefined {
 
 export const claudeRankingStrategy: CredentialRankingStrategy = {
 	healsGlobalBlocks: true,
+	usageBlockScopes: [
+		"quota:anthropic:5h", "quota:anthropic:7d",
+		"quota:anthropic:7d:opus", "quota:anthropic:7d:sonnet",
+		"quota:anthropic:7d:fable", "quota:anthropic:7d:mythos",
+	],
 	/**
 	 * Anthropic-only idle window after which a session's pinned credential no
 	 * longer suppresses usage-based re-ranking. Anthropic caps OAuth prompt-cache
@@ -944,6 +949,7 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
 	},
 	blockScopes(context) {
+		if (!context) return [...(claudeRankingStrategy.usageBlockScopes ?? []), "tier:fable", "tier:mythos"];
 		const kind = getClaudeModelKind(context);
 		return [
 			"quota:anthropic:5h",

@@ -333,10 +333,11 @@ describe("Claude saved reset account safety", () => {
 			f.state.fiveHourUnreported = weeklyReset;
 			f.state.response = { result: "reset", resets_left: 1, cleared: [weeklyReset ? "seven_day" : "five_hour"] };
 			const scopes = ["quota:anthropic:5h", "quota:anthropic:7d", "tier:fable", "auth", "account-policy", ""];
+			const deadline = Date.now() + 3_600_000;
 			for (const blockScope of scopes) {
 				f.storage.blocks.upsert({
 					credentialId: f.target.credentialId, providerKey: "anthropic:oauth",
-					blockScope, blockedUntilMs: Date.now() + 3_600_000,
+					blockScope, blockedUntilMs: deadline,
 				});
 			}
 			const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
@@ -346,6 +347,23 @@ describe("Claude saved reset account safety", () => {
 				.toEqual(scopes.filter(scope => !removed.includes(scope)).sort());
 		});
 	}
+
+	it("clears a proven legacy mirror on explicit weekly reset even when 5h is unreported", async () => {
+		const f = await fixture();
+		f.state.fiveHourUnreported = true;
+		f.state.response = { result: "reset", resets_left: 1, cleared: ["seven_day"] };
+		const deadline = Date.now() + 3_600_000;
+		for (const blockScope of ["", "quota:anthropic:7d", "auth", "tier:fable"]) {
+			f.storage.blocks.upsert({
+				credentialId: f.target.credentialId, providerKey: "anthropic:oauth",
+				blockScope, blockedUntilMs: blockScope === "tier:fable" ? deadline + 60_000 : deadline,
+			});
+		}
+		const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
+		expect(outcome.ok).toBe(true);
+		expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope).sort())
+			.toEqual(["auth", "tier:fable"]);
+	});
 
 	it("clears the restored shared block but retains an exhausted uncovered model tier", async () => {
 		const f = await fixture();

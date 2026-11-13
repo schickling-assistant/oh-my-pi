@@ -522,6 +522,8 @@ export interface CredentialRankingStrategy {
 	blockScopes?(context?: CredentialRankingContext): string[];
 	/** Exact quota provenance for preflight exhaustion, never reactive request failures. */
 	usageBlockScope?(limit: UsageLimit): string | undefined;
+	/** Exhaustive provenance scopes, also used to reconcile mixed-version legacy mirrors. */
+	usageBlockScopes?: readonly string[];
 	/**
 	 * Backoff scopes a fresh usage report can vouch for, each with the limits
 	 * gating it. {@link AuthStorage} clears a stale block under a returned scope

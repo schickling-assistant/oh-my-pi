@@ -301,14 +301,12 @@ export class ResetCredits implements ResetsApi {
 								});
 							}
 						}
-						for (const scope of scopes) {
-							this.#deps.blocks.clearScope(
-								provider,
-								access.credentialId,
-								providerTypeKey(provider, "oauth"),
-								scope,
-							);
-						}
+						this.#deps.blocks.clearResetScopes(
+							provider,
+							access.credentialId,
+							providerTypeKey(provider, "oauth"),
+							scopes,
+						);
 					}
 				} else {
 					this.#deps.blocks.clearAll(provider, access.credentialId);
