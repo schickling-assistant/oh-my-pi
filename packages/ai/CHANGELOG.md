@@ -7,6 +7,10 @@
 - Exposed Codex subscription-account usage-credit balances as exact decimal strings in normalized usage reports, broker/gateway `/v1/usage`, and `omp usage --json` (backport of #14795 at 95eebb6e).
 - Added per-account `auth.accountPolicies[].allowCreditOverage` (default `true`). Setting it to `false` makes unknown or exhausted raw plan windows ineligible, including explicit pins, retry fallback, and saved-reset recovery, regardless of available credits.
 
+### Fixed
+
+- Backported Claude inactive-gate healing from upstream commit `5bdac7ef239188e17e5f12fdfc060e2454847650`: a successful `/usage` response with an explicit null shared gate and no matching row in `limits[]` accounts for an inactive window. Missing fields, failed fetches and malformed payloads remain unknown. The existing fresh-report and five-minute reconciliation safeguards are unchanged.
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	type AuthCredential,
 	type AuthCredentialStore,
@@ -6,7 +6,8 @@ import {
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
-import { claudeRankingStrategy } from "@oh-my-pi/pi-ai/usage/claude";
+import { claudeRankingStrategy, parseClaudeUsagePayload } from "@oh-my-pi/pi-ai/usage/claude";
+import { claudeResetClearedBlockScopes } from "@oh-my-pi/pi-ai/usage/claude-reset";
 
 /**
  * A reactive Fable 429 blocks the credential until the reset that error
@@ -49,6 +50,37 @@ function claudeReport(limits: UsageLimit[], fetchedAt = Date.now()): UsageReport
 }
 
 /**
+ * The live `/usage` shape of an account with no running 5-hour window:
+ * `five_hour: null` and no `session` row in `limits[]`.
+ */
+function noSessionPayload(weeklyPercent: number): Record<string, unknown> {
+	// Same reset horizon as the harness sibling, so ranking prefers this account whenever it is unblocked.
+	const weeklyReset = new Date(Date.now() + 60 * 60_000).toISOString();
+	return {
+		five_hour: null,
+		seven_day: { utilization: weeklyPercent, resets_at: weeklyReset },
+		seven_day_opus: null,
+		seven_day_sonnet: null,
+		limits: [
+			{ kind: "weekly_all", percent: weeklyPercent, resets_at: weeklyReset, scope: null, is_active: false },
+			{
+				kind: "weekly_scoped",
+				percent: 81,
+				resets_at: weeklyReset,
+				scope: { model: { id: null, display_name: "Fable" }, surface: null },
+				is_active: true,
+			},
+		],
+	};
+}
+
+function parsedReport(payload: Record<string, unknown>): UsageReport {
+	const report = parseClaudeUsagePayload(payload, { accountId: "account-1" });
+	if (!report) throw new Error("payload did not parse");
+	return report;
+}
+
+/**
  * A sibling that can serve but has nearly nothing left, so credential ranking
  * prefers the blocked-then-healed account whenever the block actually lifts.
  * That makes `getApiKey` a direct read of the healing outcome.
@@ -82,7 +114,7 @@ interface HealHarness {
 	blocks: Map<string, number>;
 }
 
-function makeHarness(report: UsageReport, blockScope = "tier:fable"): HealHarness {
+function makeHarness(report: UsageReport | null, blockScope = "tier:fable"): HealHarness {
 	const rows = [oauthRow(1), oauthRow(2)];
 	const cache = new Map<string, { value: string; expiresAtSec: number }>();
 	const blocks = new Map<string, number>();
@@ -340,5 +372,124 @@ describe("claude usage-block healing", () => {
 		expect(health.accounts.find(account => account.credentialId === 1)?.state).toBe("healthy");
 		expect(blocks.has("1:")).toBe(false);
 		expect(blocks.has("1:tier:fable")).toBe(false);
+	});
+
+	describe("an account with no running 5-hour window", () => {
+		it("heals a saved weekly reset at the same reset identity after genuine preflight exhaustion", async () => {
+			const now = Date.now();
+			const clock = spyOn(Date, "now").mockReturnValue(now);
+			try {
+				const report = parsedReport(noSessionPayload(100));
+				const weeklyReset = report.limits.find(limit => limit.id === "anthropic:7d")?.window?.resetsAt;
+				const { storage, blocks } = makeHarness(report, "");
+				storages.push(storage);
+				blocks.clear();
+				await storage.credentials.reload();
+				expect(await storage.keys.get("anthropic", "spent", { modelId: "claude-opus-5-5" })).toBe("access-2");
+				expect(blocks.get("1:")).toBe(weeklyReset);
+				clock.mockReturnValue(now + 6 * 60_000);
+				const recovered = parsedReport(noSessionPayload(6));
+				for (const limit of recovered.limits) {
+					if (limit.window && weeklyReset !== undefined) limit.window.resetsAt = weeklyReset;
+				}
+				report.limits = recovered.limits;
+				report.fetchedAt = recovered.fetchedAt;
+				report.metadata = recovered.metadata;
+				expect(await storage.keys.get("anthropic", "restored", { modelId: "claude-opus-5-5" })).toBe("access-1");
+				expect(blocks.has("1:")).toBe(false);
+			} finally {
+				clock.mockRestore();
+			}
+		});
+
+		for (const reportedFiveHour of [true, false]) {
+			it(`preserves the existing Retry-After reconciliation delay with 5h ${reportedFiveHour ? "reported" : "declared inactive"}`, async () => {
+				const now = Date.now();
+				const clock = spyOn(Date, "now").mockReturnValue(now);
+				try {
+					const payload = noSessionPayload(6);
+					if (reportedFiveHour) payload.five_hour = { utilization: 0, resets_at: new Date(now + 3_600_000).toISOString() };
+					const report = parsedReport(payload);
+					const { storage, blocks } = makeHarness(report, "");
+					storages.push(storage);
+					blocks.clear();
+					await storage.credentials.reload();
+					await storage.limits.markReached("anthropic", "retry", {
+						credentialId: 1, modelId: "claude-opus-5-5", retryAfterMs: 3_600_000, providerTimed: true,
+					});
+					await storage.health.model("anthropic", { modelId: "claude-opus-5-5", reserveFraction: 0.1 });
+					expect(blocks.has("1:")).toBe(true);
+					clock.mockReturnValue(now + 6 * 60_000);
+					report.fetchedAt = Date.now();
+					await storage.health.model("anthropic", { modelId: "claude-opus-5-5", reserveFraction: 0.1 });
+					// Base behavior: fresh complete quota evidence may heal reactive
+					// rows after the delay, even before their Retry-After expires.
+					expect(blocks.has("1:")).toBe(false);
+				} finally {
+					clock.mockRestore();
+				}
+			});
+		}
+
+		for (const unknown of ["missing-limits", "malformed-five-hour", "reported-spent-session", "stale"] as const) {
+			it(`keeps the block for ${unknown} instead of declaring unknown gates inactive`, async () => {
+				const payload = noSessionPayload(6);
+				if (unknown === "missing-limits") delete payload.limits;
+				if (unknown === "malformed-five-hour") payload.five_hour = { utilization: "invalid" };
+				if (unknown === "reported-spent-session" && Array.isArray(payload.limits)) {
+					payload.limits.push({ kind: "session", percent: 100, resets_at: new Date(Date.now() + 3_600_000).toISOString() });
+				}
+				const report = parsedReport(payload);
+				if (unknown === "stale") report.fetchedAt = Date.now() - 3_600_000;
+				const { storage, blocks } = makeHarness(report, "");
+				storages.push(storage);
+				await storage.credentials.reload();
+				expect(await storage.keys.get("anthropic", `unknown-${unknown}`, { modelId: "claude-opus-5-5" })).toBe("access-2");
+				expect(blocks.has("1:")).toBe(true);
+			});
+		}
+
+		it("does not invent an inactive gate after a failed fetch", async () => {
+			const { storage, blocks } = makeHarness(null, "");
+			storages.push(storage);
+			await storage.credentials.reload();
+			expect(await storage.keys.get("anthropic", "failed-fetch", { modelId: "claude-opus-5-5" })).toBe("access-2");
+			expect(blocks.has("1:")).toBe(true);
+		});
+		it("heals a stale account-wide block", async () => {
+			const { storage, blocks } = makeHarness(parsedReport(noSessionPayload(55)), "");
+			storages.push(storage);
+			await storage.credentials.reload();
+
+			expect(await storage.keys.get("anthropic", "no-session", { modelId: "claude-opus-5-5" })).toBe("access-1");
+			expect(blocks.has("1:")).toBe(false);
+		});
+
+		it("keeps the block while the weekly window is spent", async () => {
+			const { storage, blocks } = makeHarness(parsedReport(noSessionPayload(100)), "");
+			storages.push(storage);
+			await storage.credentials.reload();
+
+			expect(await storage.keys.get("anthropic", "no-session-spent", { modelId: "claude-opus-5-5" })).toBe(
+				"access-2",
+			);
+			expect(blocks.has("1:")).toBe(true);
+		});
+
+		it("keeps the block when the 5-hour field is missing rather than null", async () => {
+			const { five_hour: _omitted, ...payload } = noSessionPayload(55);
+			const { storage, blocks } = makeHarness(parsedReport(payload), "");
+			storages.push(storage);
+			await storage.credentials.reload();
+
+			expect(await storage.keys.get("anthropic", "no-field", { modelId: "claude-opus-5-5" })).toBe("access-2");
+			expect(blocks.has("1:")).toBe(true);
+		});
+
+		it("clears the account-wide block after a weekly reset", () => {
+			expect(claudeResetClearedBlockScopes(["anthropic:7d"], parsedReport(noSessionPayload(55)))).toContain(
+				undefined,
+			);
+		});
 	});
 });
