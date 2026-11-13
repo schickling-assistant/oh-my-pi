@@ -89,6 +89,31 @@ omp auth-broker status    [--json]
 
 Requests use `Authorization: Bearer <token>`. The server compares against an in-memory token allow-list; the gateway’s implementation uses a timing-safe comparison.
 
+Usage reports from broker/gateway `GET /v1/usage` and `omp usage --json` omit
+provider-specific `raw` payloads. Codex subscription accounts also expose an
+optional account-wide `credits` object:
+
+```json
+{
+  "credits": {
+    "balance": "62170.7214510000",
+    "unit": "credits",
+    "hasCredits": true,
+    "unlimited": false,
+    "overageLimitReached": false
+  }
+}
+```
+
+`balance` preserves the provider's decimal string (including trailing zeroes);
+numeric provider values become decimal strings with the precision available
+after JSON parsing. A missing balance is `null`, not zero. An unreported credit
+pool omits `credits` entirely. The three boolean flags are optional and retain
+explicit `false` values; unlimited entitlement is separate from the balance.
+These are usage credits, not USD or OpenAI API credits. They are also separate
+from `resetCredits` (saved quota resets); no grant or expiry information is
+implied. The balance observation time is the report's `fetchedAt`.
+
 A snapshot contains `generation`, `generatedAt`, `serverNowMs`, `refresher`
 (`enabled`, `intervalMs`, `skewMs`, `nextSweepInMs`), and `credentials`.
 Each credential carries its id/provider/redacted credential/`identityKey`,
@@ -352,6 +377,26 @@ The gateway uses the same broker URL/token resolution and account-pool environme
 | `retry.usageReservePct` | `10` | Default protected remaining-quota percentage when an account has no `reservePct` override. |
 
 Broker connection values come from the agent's main config file, not project settings. Account policies/reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy changes and can replace the credential store in place when effective broker settings change; failed changes leave the current store active.
+
+Set `allowCreditOverage: false` on an account policy to prohibit routing when
+its request-scoped raw plan windows are exhausted or unknown. The default is
+`true`, preserving normal credit-funded overage behavior. This is a hard
+eligibility constraint: account priority, explicit or automatic session pins,
+retry/blocked-account fallback, and saved-reset recovery cannot override it.
+Credit balances and credit-adjusted `allowed`/window status do not establish
+plan headroom. Missing reports, missing plan windows, unknown counters, or stale
+windows whose reset has passed fail closed until known in-plan usage is available.
+Account-specific credential resolution also enforces this constraint, including
+the credential access used by saved-reset operations.
+
+```yaml
+auth:
+  accountPolicies:
+    - provider: openai-codex
+      account:
+        email: personal@example.com
+      allowCreditOverage: false
+```
 
 #### How sessions choose and keep an account
 

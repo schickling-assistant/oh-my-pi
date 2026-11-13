@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exposed Codex subscription-account usage-credit balances as exact decimal strings in normalized usage reports, broker/gateway `/v1/usage`, and `omp usage --json` (backport of #14795 at 95eebb6e).
+- Added per-account `auth.accountPolicies[].allowCreditOverage` (default `true`). Setting it to `false` makes unknown or exhausted raw plan windows ineligible, including explicit pins, retry fallback, and saved-reset recovery, regardless of available credits.
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

@@ -6,6 +6,8 @@ import { type AuthAccountPolicies, AuthStorage, SqliteAuthCredentialStore } from
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
+import { OAuthRefresher } from "../src/auth/refresh";
+import { parseCodexRateLimitHeaders } from "../src/usage/openai-codex";
 
 // Running sessions with a warm automatic pin and `reclaimAbovePct` on the
 // preferred account. The clock advances in short steps so Anthropic pins stay
@@ -63,6 +65,7 @@ async function setup(provider: Provider, policies: AuthAccountPolicies, accounts
 	if (!store) throw new Error("test setup failed");
 	const usageProvider: UsageProvider = {
 		id: provider,
+		parseRateLimitHeaders: provider === "openai-codex" ? parseCodexRateLimitHeaders : undefined,
 		async fetchUsage(params) {
 			const id = params.credential.accountId;
 			return id ? (usage.get(id) ?? null) : null;
@@ -295,5 +298,173 @@ describe("accountPolicies reclaimAbovePct", () => {
 		setUsage(A, "b", 0.86, 0.1);
 		setUsage(A, "c", 0, 0.1);
 		expect(await next(auth, A, "S1")).toBe("b");
+	});
+});
+
+describe("accountPolicies allowCreditOverage hard eligibility", () => {
+	const C = "openai-codex" as const;
+	const strict = [{ provider: C, account: { accountId: "a" }, priority: 100, allowCreditOverage: false }];
+
+	function creditAdjusted(accountId: string, primary: number, secondary: number): void {
+		setUsage(C, accountId, primary, secondary);
+		const report = usage.get(accountId)!;
+		// Credits (or reset recovery) can make effective availability healthy without
+		// changing the raw plan counters. They must never authorize strict routing.
+		report.metadata = { ...report.metadata, allowed: true, limitReached: false, creditOverage: true };
+		for (const window of report.limits) window.status = "warning";
+	}
+
+	test("default and explicit true preserve credit-funded exhausted-window routing", async () => {
+		for (const allowCreditOverage of [undefined, true]) {
+			const auth = await setup(C, [
+				{ provider: C, account: { accountId: "a" }, allowCreditOverage },
+			], ["a"]);
+			creditAdjusted("a", 1, 0.2);
+			expect(await next(auth, C, "default")).toBe("a");
+		}
+	});
+
+	test("a sole exhausted account stays ineligible through allowBlocked fallback", async () => {
+		const auth = await setup(C, strict, ["a"]);
+		creditAdjusted("a", 1, 0.2);
+		expect(await next(auth, C, "single")).toBeUndefined();
+		// Exact-account access takes checkUsage=false/allowBlocked=true.
+		const account = auth.oauth.accounts(C)[0]!;
+		expect((await auth.oauth.accessById(C, account.credentialId))?.ok).toBe(false);
+	});
+
+	test("ranking cannot promote a high-priority exhausted account over an eligible sibling", async () => {
+		const auth = await setup(C, strict, ["a", "b"]);
+		creditAdjusted("a", 0.2, 1);
+		setUsage(C, "b", 0.3, 0.4);
+		expect(await next(auth, C, "ranked")).toBe("b");
+	});
+
+	for (const explicit of [false, true]) {
+		test(`${explicit ? "explicit" : "automatic"} pins cannot retain an exhausted strict account`, async () => {
+			const auth = await setup(C, strict, ["a", "b"]);
+			setUsage(C, "a", 0.1, 0.2);
+			setUsage(C, "b", 0.3, 0.4);
+			expect(await next(auth, C, "pinned")).toBe("a");
+			if (explicit) {
+				const account = auth.oauth.accounts(C).find(account => account.accountId === "a")!;
+				expect(auth.sessions.pin(C, "pinned", account.credentialId)).toBe(true);
+			}
+			creditAdjusted("a", 1, 0.2);
+			await advance(auth, C, MIN);
+			expect(await next(auth, C, "pinned")).toBe("b");
+		});
+	}
+
+	for (const unknown of ["report", "windows", "missing-window", "counter", "nonfinite", "expired", "refreshed-expired"] as const) {
+		test(`fails closed with unknown ${unknown}`, async () => {
+			const auth = await setup(C, strict, ["a"]);
+			setUsage(C, "a", 0.1, 0.2);
+			const report = usage.get("a")!;
+			if (unknown === "report") usage.delete("a");
+			if (unknown === "windows") report.limits = [];
+			if (unknown === "missing-window") report.limits[0]!.window = undefined;
+			if (unknown === "counter") report.limits[0]!.amount = { unit: "percent" };
+			if (unknown === "nonfinite") report.limits[0]!.amount.usedFraction = Number.NaN;
+			if (unknown === "expired") {
+				report.limits[0]!.window!.resetsAt = Date.now() - 1;
+				report.fetchedAt = Date.now() - MIN;
+			}
+			if (unknown === "refreshed-expired") report.limits[0]!.window!.resetsAt = Date.now() - 1;
+			expect(await next(auth, C, "unknown")).toBeUndefined();
+		});
+	}
+
+	test("partial headers cannot make an unobserved expired weekly window current", async () => {
+		const auth = await setup(C, strict, ["a"]);
+		setUsage(C, "a", 0.1, 0.5);
+		usage.get("a")!.limits[1]!.window!.resetsAt = Date.now() + MIN;
+		expect(await next(auth, C, "partial-headers")).toBe("a");
+		clock += 2 * MIN;
+		expect(auth.usage.ingestHeaders(C, {
+			"x-codex-primary-used-percent": "10",
+			"x-codex-primary-window-minutes": "300",
+			"x-codex-primary-reset-at": String(Math.floor((Date.now() + HOUR) / 1000)),
+		}, { sessionId: "partial-headers", responseStatus: 200 })).toBe(true);
+		expect(await next(auth, C, "partial-headers")).toBeUndefined();
+	});
+
+	test("reset recovery needs raw headroom in every remaining plan window", async () => {
+		const auth = await setup(C, strict, ["a"]);
+		creditAdjusted("a", 1, 1);
+		expect(await next(auth, C, "reset")).toBeUndefined();
+		// A partial saved reset clears the short window and effective denial,
+		// but leaves the weekly window exhausted.
+		creditAdjusted("a", 0, 1);
+		await advance(auth, C, MIN);
+		expect(await next(auth, C, "reset")).toBeUndefined();
+		creditAdjusted("a", 0, 0.5);
+		await advance(auth, C, MIN);
+		expect(await next(auth, C, "reset")).toBe("a");
+	});
+
+	test("retry rotation cannot return an exhausted strict sibling", async () => {
+		const auth = await setup(C, strict, ["a", "b"]);
+		creditAdjusted("a", 1, 0.2);
+		setUsage(C, "b", 0.3, 0.4);
+		expect(await next(auth, C, "retry")).toBe("b");
+		const failed = auth.oauth.accounts(C).find(account => account.accountId === "b")!;
+		await auth.limits.rotate(C, "retry", {
+			credentialId: failed.credentialId,
+			error: { status: 429, message: "usage limit reached" },
+			waitForSibling: false,
+		});
+		expect(await next(auth, C, "retry")).not.toBe("a");
+	});
+
+	test("requires raw plan usage without a ranking strategy or a usage provider", async () => {
+		if (!store) throw new Error("test setup failed");
+		const auth = new AuthStorage(store, {
+			usageProviderResolver: () => undefined,
+			accountPolicies: [{ provider: "unmetered", account: { accountId: "a" }, allowCreditOverage: false }],
+		});
+		await auth.credentials.set("unmetered", [{
+			type: "oauth", access: "access-a", refresh: "refresh-a", expires: Date.now() + WEEK, accountId: "a",
+		}]);
+		expect(await auth.keys.get("unmetered", "unknown-provider")).toBeUndefined();
+	});
+
+	test("saved-reset credential recovery cannot authorize credit-funded access", async () => {
+		const auth = await setup(C, strict, ["a"]);
+		creditAdjusted("a", 1, 0.2);
+		const account = auth.oauth.accounts(C)[0]!;
+		const outcome = await auth.resets.redeem({
+			target: { provider: C, credentialId: account.credentialId, creditId: "saved-reset" },
+		});
+		expect(outcome).toMatchObject({ ok: false, code: "account_unavailable" });
+		expect(await next(auth, C, "after-reset")).toBeUndefined();
+	});
+
+	test("refresh cannot return a newly identified strict account using another account's usage", async () => {
+		const auth = await setup(C, [
+			{ provider: C, account: { accountId: "b" }, allowCreditOverage: false },
+		], ["a"]);
+		setUsage(C, "a", 0.1, 0.2);
+		creditAdjusted("b", 1, 0.2);
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, all) => {
+			const credential = all[provider] as OAuthCredentials | undefined;
+			return credential
+				? { apiKey: "api-b", newCredentials: { ...credential, accountId: "b" } }
+				: null;
+		});
+		expect(await next(auth, C, "refresh-identity")).toBeUndefined();
+	});
+
+	test("preflight identity changes cannot reuse another account's ranked usage", async () => {
+		const auth = await setup(C, [
+			{ provider: C, account: { accountId: "b" }, allowCreditOverage: false },
+		], ["a", "c"]);
+		setUsage(C, "a", 0.1, 0.2);
+		setUsage(C, "c", 0.3, 0.4);
+		creditAdjusted("b", 1, 0.2);
+		vi.spyOn(OAuthRefresher.prototype, "refresh").mockImplementation(async (_provider, credential) =>
+			credential.accountId === "a" ? { ...credential, accountId: "b" } : credential,
+		);
+		expect(await auth.keys.get(C, "preflight-identity", { forceRefresh: true })).toBe("api-c");
 	});
 });
