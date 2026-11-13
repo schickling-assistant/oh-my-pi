@@ -22,6 +22,7 @@ interface ResetFixture {
 		remaining: number;
 		weeklyUsed: number;
 		discoveryStatus?: number;
+		fiveHourUnreported?: boolean;
 		genericUsageEnabled?: boolean;
 		response: unknown;
 		responseStatus: number;
@@ -81,7 +82,7 @@ async function fixture(): Promise<ResetFixture> {
 				}
 				const hour = 3_600_000;
 				return Response.json({
-					five_hour: { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
+					five_hour: state.fiveHourUnreported ? null : { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
 					seven_day: { utilization: state.weeklyUsed, resets_at: new Date(Date.now() + 72 * hour).toISOString() },
 					limits: [
 						{
@@ -325,6 +326,26 @@ describe("Claude saved reset account safety", () => {
 		expect(outcomes.map(outcome => outcome.code)).toEqual(["reset", "reset"]);
 		expect(f.posts).toHaveLength(1);
 	});
+
+	for (const weeklyReset of [false, true]) {
+		it(`clears exactly declared quota scopes after an explicit ${weeklyReset ? "weekly" : "session"} reset`, async () => {
+			const f = await fixture();
+			f.state.fiveHourUnreported = weeklyReset;
+			f.state.response = { result: "reset", resets_left: 1, cleared: [weeklyReset ? "seven_day" : "five_hour"] };
+			const scopes = ["quota:anthropic:5h", "quota:anthropic:7d", "tier:fable", "auth", "account-policy", ""];
+			for (const blockScope of scopes) {
+				f.storage.blocks.upsert({
+					credentialId: f.target.credentialId, providerKey: "anthropic:oauth",
+					blockScope, blockedUntilMs: Date.now() + 3_600_000,
+				});
+			}
+			const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
+			expect(outcome.ok).toBe(true);
+			const removed = weeklyReset ? ["quota:anthropic:7d"] : ["quota:anthropic:5h", ""];
+			expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope).sort())
+				.toEqual(scopes.filter(scope => !removed.includes(scope)).sort());
+		});
+	}
 
 	it("clears the restored shared block but retains an exhausted uncovered model tier", async () => {
 		const f = await fixture();

@@ -1,6 +1,6 @@
 import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { Provider } from "../types";
-import type { CredentialRankingContext, CredentialRankingStrategy, UsageReport } from "../usage";
+import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
 import type { CredentialPool } from "./pool";
 import { isSqliteCorruptionError, USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
@@ -394,7 +394,25 @@ export class CredentialBlocks implements BlocksApi {
 		blockedUntilMs: number,
 		blockScope: string | undefined = undefined,
 		providerTimed = false,
+		usageLimits?: readonly UsageLimit[],
 	): void {
+		const usageBlockScope = this.#deps.strategies(provider)?.usageBlockScope;
+		if (usageLimits && usageBlockScope) {
+			for (const limit of usageLimits) {
+				if (!isUsageLimitReached([limit])) continue;
+				const scope = usageBlockScope(limit);
+				const resetAt = limit.window?.resetsAt;
+				this.mark(
+					provider,
+					providerKey,
+					credentialIndex,
+					scope && resetAt !== undefined ? resetAt : blockedUntilMs,
+					scope ?? blockScope,
+					providerTimed,
+				);
+			}
+			return;
+		}
 		const credentialId = this.#deps.pool.entries(provider)[credentialIndex]?.id;
 		if (credentialId === undefined) return;
 		const backoffKey = scopedBackoffKey(providerKey, blockScope);
@@ -542,9 +560,13 @@ export class CredentialBlocks implements BlocksApi {
 		// last-good report for hours after `/usage` starts failing, and those
 		// healthy limits describe the account before the 429 that blocked it.
 		if (!Number.isFinite(report.fetchedAt) || Date.now() - report.fetchedAt > USAGE_REPORT_TTL_MS) return;
-		for (const { blockScope, limits, healthy } of strategy?.healableBlockScopes?.(report) ?? []) {
+		for (const { blockScope, limits, healthy, resetAtMs } of strategy?.healableBlockScopes?.(report) ?? []) {
 			if (healthy === false || isUsageLimitReached(limits) || (healthy === undefined && limits.length === 0))
 				continue;
+			if (resetAtMs !== undefined) {
+				const blockedUntil = this.#exactBlockedUntil(credentialId, providerKey, blockScope);
+				if (blockedUntil === undefined || resetAtMs < blockedUntil) continue;
+			}
 			this.#clearHealedBlockScope(provider, providerKey, credentialId, blockScope, report.fetchedAt);
 		}
 	}

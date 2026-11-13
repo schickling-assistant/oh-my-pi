@@ -905,6 +905,13 @@ function findClaudeSecondaryLimit(
 		.reduce<UsageLimit | undefined>((selected, limit) => morePressuredLimit(selected, limit, nowMs), undefined);
 }
 
+/** Dedicated scopes preserve the causing quota without changing persisted block rows. */
+export function claudeQuotaBlockScope(limitId: string): string | undefined {
+	return /^anthropic:(5h|7d(?::(?:opus|sonnet|fable|mythos))?)$/.test(limitId)
+		? `quota:${limitId}`
+		: undefined;
+}
+
 export const claudeRankingStrategy: CredentialRankingStrategy = {
 	healsGlobalBlocks: true,
 	/**
@@ -936,6 +943,21 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 		const kind = getClaudeModelKind(context);
 		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
 	},
+	blockScopes(context) {
+		const kind = getClaudeModelKind(context);
+		return [
+			"quota:anthropic:5h",
+			"quota:anthropic:7d",
+			...(kind ? [`quota:anthropic:7d:${kind}`] : []),
+			...(kind === "fable" || kind === "mythos" ? [`tier:${kind}`] : []),
+		];
+	},
+	usageBlockScope(limit) {
+		const resetAt = limit.window?.resetsAt;
+		return typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > Date.now()
+			? claudeQuotaBlockScope(limit.id)
+			: undefined;
+	},
 	/**
 	 * A reactive Fable/Mythos block carries the reset the 429 reported, but
 	 * Anthropic can restore the tier earlier (plan change, corrected counter),
@@ -948,6 +970,22 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 	 * complete report with every reported quota healthy can heal that scope.
 	 */
 	healableBlockScopes(report) {
+		// These scopes can only be written by preflight usage exhaustion.
+		// A saved reset can restore one quota without advancing its reset clock;
+		// missing unrelated gates must not strand that proven recovery.
+		const quotaScopes = report.limits.flatMap(limit => {
+			const blockScope = claudeRankingStrategy.usageBlockScope?.(limit);
+			const used = limit.amount.usedFraction;
+			return blockScope
+				? [{
+						blockScope,
+						limits: [limit],
+						resetAtMs: limit.window?.resetsAt,
+						healthy: report.metadata?.source !== "ratelimit-headers" &&
+							typeof used === "number" && Number.isFinite(used) && used >= 0 && used < 1,
+					}]
+				: [];
+		});
 		const sharedLimits = report.limits.filter(limit => limit.scope.shared === true);
 		// The endpoint returns a report as soon as one window parses, and a tier
 		// 429 can be caused by a shared wall. A payload missing a shared gate
@@ -956,13 +994,14 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 		const everySharedGateReported = CLAUDE_SHARED_GATE_WINDOW_IDS.every(windowId =>
 			sharedLimits.some(limit => limit.scope.windowId === windowId || limit.window?.id === windowId),
 		);
-		if (!everySharedGateReported) return [];
+		if (!everySharedGateReported) return quotaScopes;
 		const tiers = new Set<string>();
 		for (const limit of report.limits) {
 			const tier = limit.scope.tier;
 			if (tier === "fable" || tier === "mythos") tiers.add(tier);
 		}
 		return [
+			...quotaScopes,
 			{
 				blockScope: "",
 				limits: report.limits.filter(limit => limit.scope.shared === true || limit.scope.tier !== undefined),
