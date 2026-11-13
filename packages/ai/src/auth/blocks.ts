@@ -1,6 +1,6 @@
 import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { Provider } from "../types";
-import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
+import type { CredentialRankingContext, CredentialRankingStrategy, UsageReport } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
 import type { CredentialPool } from "./pool";
 import { isSqliteCorruptionError, USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
@@ -394,24 +394,7 @@ export class CredentialBlocks implements BlocksApi {
 		blockedUntilMs: number,
 		blockScope: string | undefined = undefined,
 		providerTimed = false,
-		usageLimits?: readonly UsageLimit[],
 	): void {
-		const usageBlockScope = this.#deps.strategies(provider)?.usageBlockScope;
-		if (usageLimits && usageBlockScope) {
-			for (const limit of usageLimits) {
-				if (!isUsageLimitReached([limit])) continue;
-				const scope = usageBlockScope(limit);
-				const resetAt = limit.window?.resetsAt;
-				this.mark(
-					provider,
-					providerKey,
-					credentialIndex,
-					scope && resetAt !== undefined ? resetAt : blockedUntilMs,
-					scope ?? blockScope,
-					providerTimed,
-				);
-			}
-		}
 		const credentialId = this.#deps.pool.entries(provider)[credentialIndex]?.id;
 		if (credentialId === undefined) return;
 		const backoffKey = scopedBackoffKey(providerKey, blockScope);
@@ -507,45 +490,6 @@ export class CredentialBlocks implements BlocksApi {
 		}
 	}
 
-	/** A confirmed reset clears only declared quotas and their proven legacy mirrors. */
-	clearResetScopes(provider: Provider, credentialId: number, providerKey: string, scopes: readonly (string | undefined)[]): void {
-		const strategy = this.#deps.strategies(provider);
-		const provenanceScopes = strategy?.usageBlockScopes ?? [];
-		for (const legacyScope of ["", ...(strategy?.blockScopes?.() ?? [])]) {
-			if (provenanceScopes.includes(legacyScope)) continue;
-			const deadline = this.#exactBlockedUntil(credentialId, providerKey, legacyScope);
-			if (deadline === undefined) continue;
-			const siblings = provenanceScopes.filter(
-				scope => this.#exactBlockedUntil(credentialId, providerKey, scope) === deadline,
-			);
-			if (siblings.length === 0 || !siblings.every(scope => scopes.includes(scope))) continue;
-			if (this.clearScope(provider, credentialId, providerKey, legacyScope)) {
-				this.#restoreUsageMirror(provider, credentialId, providerKey, legacyScope, scopes);
-			}
-		}
-		for (const scope of scopes) this.clearScope(provider, credentialId, providerKey, scope);
-	}
-
-	#restoreUsageMirror(
-		provider: Provider, credentialId: number, providerKey: string,
-		legacyScope: string, excludedScopes: readonly (string | undefined)[],
-	): void {
-		if (this.#exactBlockedUntil(credentialId, providerKey, legacyScope) !== undefined) return;
-		const credentialIndex = this.#deps.pool.entries(provider).findIndex(entry => entry.id === credentialId);
-		if (credentialIndex < 0) return;
-		// Longest-wins may have hidden an independent, shorter quota wall.
-		let remainingDeadline = 0;
-		for (const scope of this.#deps.strategies(provider)?.usageBlockScopes ?? []) {
-			if (excludedScopes.includes(scope)) continue;
-			remainingDeadline = Math.max(
-				remainingDeadline, this.#exactBlockedUntil(credentialId, providerKey, scope) ?? 0,
-			);
-		}
-		if (remainingDeadline > Date.now()) {
-			this.mark(provider, providerKey, credentialIndex, remainingDeadline, legacyScope, true);
-		}
-	}
-
 	/** Providers whose stale usage-limit blocks a healthy live report may clear. */
 	supportsHealing(provider: Provider): boolean {
 		return this.#deps.strategies(provider)?.healableBlockScopes !== undefined;
@@ -598,44 +542,9 @@ export class CredentialBlocks implements BlocksApi {
 		// last-good report for hours after `/usage` starts failing, and those
 		// healthy limits describe the account before the 429 that blocked it.
 		if (!Number.isFinite(report.fetchedAt) || Date.now() - report.fetchedAt > USAGE_REPORT_TTL_MS) return;
-		const healingScopes = strategy?.healableBlockScopes?.(report) ?? [];
-		const provenanceScopes = strategy?.usageBlockScopes;
-		const provenanceBackedLegacyScopes = new Set<string>();
-		if (provenanceScopes) {
-			// Old clients and broker projections read only the original global/tier
-			// row. Lift that mirror only if every known cause at its deadline is
-			// independently healthy, including causes absent from this report.
-			const legacyScopes = ["", ...(strategy?.blockScopes?.() ?? [])]
-				.filter(scope => !provenanceScopes.includes(scope));
-			for (const legacyScope of legacyScopes) {
-				const deadline = this.#exactBlockedUntil(credentialId, providerKey, legacyScope);
-				if (deadline === undefined) continue;
-				const siblings = provenanceScopes.filter(
-					scope => this.#exactBlockedUntil(credentialId, providerKey, scope) === deadline,
-				);
-				if (siblings.length === 0) continue;
-				provenanceBackedLegacyScopes.add(legacyScope);
-				const recovered = siblings.every(scope => {
-					const evidence = healingScopes.find(candidate => candidate.blockScope === scope);
-					return evidence?.healthy === true &&
-						evidence.resetAtMs !== undefined && evidence.resetAtMs >= deadline &&
-						!isUsageLimitReached(evidence.limits) &&
-						this.#blockScopeReadyToHeal(credentialId, providerKey, scope, report.fetchedAt);
-				});
-				if (recovered) {
-					this.#clearHealedBlockScope(provider, providerKey, credentialId, legacyScope, report.fetchedAt);
-					this.#restoreUsageMirror(provider, credentialId, providerKey, legacyScope, siblings);
-				}
-			}
-		}
-		for (const { blockScope, limits, healthy, resetAtMs } of healingScopes) {
-			if (provenanceBackedLegacyScopes.has(blockScope)) continue;
+		for (const { blockScope, limits, healthy } of strategy?.healableBlockScopes?.(report) ?? []) {
 			if (healthy === false || isUsageLimitReached(limits) || (healthy === undefined && limits.length === 0))
 				continue;
-			if (resetAtMs !== undefined) {
-				const blockedUntil = this.#exactBlockedUntil(credentialId, providerKey, blockScope);
-				if (blockedUntil === undefined || resetAtMs < blockedUntil) continue;
-			}
 			this.#clearHealedBlockScope(provider, providerKey, credentialId, blockScope, report.fetchedAt);
 		}
 	}
@@ -646,20 +555,6 @@ export class CredentialBlocks implements BlocksApi {
 	 * and broker-sourced blocks get one usage-cache window before a healthy
 	 * report may clear them.
 	 */
-	#blockScopeReadyToHeal(
-		credentialId: number,
-		providerKey: string,
-		blockScope: string | undefined,
-		fetchedAt: number,
-	): boolean {
-		const scopedKey = scopedBackoffKey(providerKey, blockScope);
-		const scopedProbeAfterMs = this.#credentialBackoff.get(scopedKey)?.get(credentialId)?.probeAfter ?? 0;
-		const storeScopedProbeAfterMs = this.#readPersistedCredentialBlockReconcileAfter(
-			credentialId, providerKey, blockScope ?? "",
-		);
-		return Math.max(scopedProbeAfterMs, storeScopedProbeAfterMs) <= Math.min(Date.now(), fetchedAt);
-	}
-
 	#clearHealedBlockScope(
 		provider: Provider,
 		providerKey: string,
@@ -669,7 +564,17 @@ export class CredentialBlocks implements BlocksApi {
 	): void {
 		const blockedUntilMs = this.#exactBlockedUntil(credentialId, providerKey, blockScope);
 		if (blockedUntilMs === undefined) return;
-		if (!this.#blockScopeReadyToHeal(credentialId, providerKey, blockScope, fetchedAt)) return;
+		const nowMs = Date.now();
+		const scopedKey = scopedBackoffKey(providerKey, blockScope);
+		const scopedProbeAfterMs = this.#credentialBackoff.get(scopedKey)?.get(credentialId)?.probeAfter ?? 0;
+		const storeScopedProbeAfterMs = this.#readPersistedCredentialBlockReconcileAfter(
+			credentialId,
+			providerKey,
+			blockScope ?? "",
+		);
+		if (Math.max(scopedProbeAfterMs, storeScopedProbeAfterMs) > Math.min(nowMs, fetchedAt)) {
+			return;
+		}
 		if (!this.clearScope(provider, credentialId, providerKey, blockScope)) return;
 		logger.info("Cleared stale usage-limit block after healthy live usage report", {
 			credentialId,

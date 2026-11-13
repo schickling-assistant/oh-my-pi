@@ -268,7 +268,6 @@ export class CredentialSelector {
 					blockedUntil,
 					args.blockScope,
 					resetAtMs !== undefined,
-					scopedLimits,
 				);
 				blocked = true;
 			}
@@ -462,7 +461,6 @@ export class CredentialSelector {
 					blockedUntil,
 					args.blockScope,
 					resetAtMs !== undefined,
-					scopedLimits,
 				);
 				blocked = true;
 			}
@@ -1087,7 +1085,6 @@ export class CredentialSelector {
 						resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
 						blockScope,
 						resetAtMs !== undefined,
-						scopedLimits,
 					);
 					return undefined;
 				}
@@ -1166,7 +1163,6 @@ export class CredentialSelector {
 							resetAtMs ?? Date.now() + DEFAULT_BLOCK_MS,
 							blockScope,
 							resetAtMs !== undefined,
-							scopedLimits,
 						);
 						return undefined;
 					}

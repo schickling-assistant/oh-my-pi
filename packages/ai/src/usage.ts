@@ -520,10 +520,6 @@ export interface CredentialRankingStrategy {
 	 * block written under one scope is invisible to requests and to healing.
 	 */
 	blockScopes?(context?: CredentialRankingContext): string[];
-	/** Exact quota provenance for preflight exhaustion, never reactive request failures. */
-	usageBlockScope?(limit: UsageLimit): string | undefined;
-	/** Exhaustive provenance scopes, also used to reconcile mixed-version legacy mirrors. */
-	usageBlockScopes?: readonly string[];
 	/**
 	 * Backoff scopes a fresh usage report can vouch for, each with the limits
 	 * gating it. {@link AuthStorage} clears a stale block under a returned scope
@@ -535,13 +531,7 @@ export interface CredentialRankingStrategy {
 	 * false never heals; true heals even with empty limits; absent requires
 	 * non-empty limits with none exhausted.
 	 */
-	healableBlockScopes?(report: UsageReport): {
-		blockScope: string;
-		limits: UsageLimit[];
-		healthy?: boolean;
-		/** A known-window block may heal only at the same or a later reset identity. */
-		resetAtMs?: number;
-	}[];
+	healableBlockScopes?(report: UsageReport): { blockScope: string; limits: UsageLimit[]; healthy?: boolean }[];
 	/** Whether fresh reports can heal legacy account-wide quota backoffs. */
 	healsGlobalBlocks?: boolean;
 	/** Fallback window durations (ms) when limits don't specify durationMs. */
