@@ -69,6 +69,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				provider: "anthropic",
 				account: { email: "policy@example.com" },
 				reservePct: 25,
+				allowCreditOverage: false,
 			},
 		] satisfies AuthAccountPolicies;
 		await Bun.write(
@@ -193,6 +194,10 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 
 	test("strictly rejects malformed account policy config", async () => {
 		const invalidConfigs = [
+			{
+				yaml: 'auth:\n  accountPolicies:\n    - provider: openai-codex\n      account:\n        email: policy@example.com\n      allowCreditOverage: "false"\n',
+				error: "auth.accountPolicies[0].allowCreditOverage must be a boolean",
+			},
 			{
 				yaml: "auth: [",
 				error: "contains invalid YAML",

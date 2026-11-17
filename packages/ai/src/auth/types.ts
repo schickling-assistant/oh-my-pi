@@ -62,6 +62,8 @@ export interface AuthAccountPolicy {
 	readonly priority?: number;
 	/** Protected remaining quota percentage for this account. */
 	readonly reservePct?: number;
+	/** Defaults to true. False requires known, unexhausted raw plan windows before routing. */
+	readonly allowCreditOverage?: boolean;
 }
 
 /** Read-only set of per-account routing policies. */

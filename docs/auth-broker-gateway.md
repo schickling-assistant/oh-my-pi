@@ -307,6 +307,12 @@ The gateway uses the same broker URL/token resolution and account-pool environme
 
 Broker connection values come from the agent's main config file, not project settings. Account policies/reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy changes and can replace the credential store in place when effective broker settings change; failed changes leave the current store active.
 
+Set `allowCreditOverage: false` on an account policy to prohibit routing when
+its request-scoped raw plan windows are exhausted or unknown. The default is
+`true`. This is a hard eligibility constraint: explicit pins, retry fallback,
+and saved-reset recovery cannot override it. Credit balances do not establish
+plan headroom; missing or stale plan windows fail closed.
+
 #### How sessions choose and keep an account
 
 When a provider has account policies, OMP ranks its accounts whenever it selects or reconsiders one (not on every request: a warm explicit pin, or a sole account, skips ranking). In order, an account loses when it is blocked (hit a limit), outside a required plan, past its renewable allowance, or inside its reserve; then Codex accounts with an untouched 5-hour window are preferred, accounts whose 5-hour window is at least 85% used fall back, accounts with a usage report beat accounts whose report could not be fetched, and only then does higher `priority` win. Ties go to the account whose quota would otherwise expire unused soonest. So `priority` orders healthy, measured accounts; it does not override reserve or the safety checks before it.

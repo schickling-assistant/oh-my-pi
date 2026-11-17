@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added per-account `auth.accountPolicies[].allowCreditOverage` (default `true`). Setting it to `false` requires known, unexhausted raw plan windows, including explicit pins, retry fallback, and saved-reset recovery.
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
