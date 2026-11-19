@@ -5,6 +5,7 @@
 ### Added
 
 - Added per-account `auth.accountPolicies[].allowCreditOverage` (default `true`). Setting it to `false` requires known, unexhausted raw plan windows, including explicit pins, retry fallback, and saved-reset recovery.
+- Added socket-only `auth-gateway serve --bind unix:/absolute/path` with explicit socket mode 0600 for deployment in a service-owned 0700 directory; the shared TCP bind parser is unchanged.
 
 ## [18.10.2] - 2026-10-12
 
