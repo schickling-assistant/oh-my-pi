@@ -105,3 +105,21 @@ test("Unix bind reclaims a stale socket left by a killed listener", async () => 
 		await f.close();
 	}
 });
+
+test("Unix shutdown delegates pathname cleanup to Bun, including unsupported replacements", async () => {
+	const f = await fixture();
+	const gateway = startAuthGateway(f.opts);
+	try {
+		try {
+			// Replacing the pathname violates the private single-instance
+			// directory contract. Bun still unlinks it; do not claim otherwise.
+			await fs.unlink(f.unix);
+			await Bun.write(f.unix, "replacement outside the service contract");
+		} finally {
+			await gateway.close();
+		}
+		await expect(fs.lstat(f.unix)).rejects.toHaveProperty("code", "ENOENT");
+	} finally {
+		await f.close();
+	}
+});

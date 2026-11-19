@@ -1012,10 +1012,8 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 		idleTimeout: 255,
 	});
 
-	let ownedSocket: { dev: number; ino: number } | undefined;
 	try {
 		if (unix !== undefined) {
-			ownedSocket = fs.lstatSync(unix);
 			// The deployment creates the parent directory with mode 0700.
 			// Explicit chmod makes the socket 0600 independently of the umask.
 			fs.chmodSync(unix, 0o600);
@@ -1026,18 +1024,12 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 		throw error;
 	}
 	const close = async (): Promise<void> => {
+		// Bun unlinks the Unix pathname itself, including a replacement file.
+		// An inode check after stop() cannot protect replacements. The private
+		// 0700 runtime directory and single-instance service ownership therefore
+		// must exclude pathname replacement for the listener's entire lifetime.
 		await server.stop(true);
 		router.close();
-		if (unix !== undefined && ownedSocket !== undefined) {
-			try {
-				const current = await fs.promises.lstat(unix);
-				if (current.isSocket() && current.dev === ownedSocket.dev && current.ino === ownedSocket.ino) {
-					await fs.promises.unlink(unix);
-				}
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-		}
 	};
 	if (unix !== undefined) return { transport: "unix", unix, url: `unix:${unix}`, close };
 	const hostname = server.hostname ?? bind!.hostname;
