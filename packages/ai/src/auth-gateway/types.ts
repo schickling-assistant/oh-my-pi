@@ -147,7 +147,7 @@ export interface AuthGatewayFormatModule {
 }
 
 export interface AuthGatewayServerOptions {
-	/** Listen address. Default `127.0.0.1:4000`. */
+	/** Listen address: host:port or unix:/absolute/path. Default `127.0.0.1:4000`. */
 	bind?: string;
 	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */
 	bearerTokens: string[];
@@ -157,9 +157,10 @@ export interface AuthGatewayServerOptions {
 	version?: string;
 }
 
-export interface AuthGatewayServerHandle {
-	url: string;
-	port: number;
-	hostname: string;
+export type AuthGatewayServerHandle = {
 	close(): Promise<void>;
-}
+	url: string;
+} & (
+	| { transport: "tcp"; port: number; hostname: string }
+	| { transport: "unix"; unix: string }
+);

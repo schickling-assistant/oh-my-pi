@@ -334,7 +334,11 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		listModels: () => modelById.values(),
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
 	});
-	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
+	process.stdout.write(
+		handle.transport === "unix"
+			? `auth-gateway listening on unix:${handle.unix} (chmod 0600)\n`
+			: `auth-gateway listening on ${handle.url}\n`,
+	);
 	if (gatewayToken) {
 		process.stdout.write(`bearer token: ${getTokenFilePath()} (chmod 0600)\n`);
 	} else {

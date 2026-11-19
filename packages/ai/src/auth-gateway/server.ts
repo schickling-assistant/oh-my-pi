@@ -28,6 +28,8 @@
  * serves them over HTTP behind bearer auth, `stdio.ts` over JSON lines.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -945,15 +947,39 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 	return { route, close: () => sessionStates.close() };
 }
 
+/**
+ * The deployment owns a private 0700 parent directory and enforces one
+ * instance (systemd RuntimeDirectory). Reclaim leftover socket files only;
+ * never unlink regular files, directories, or symlinks. This deliberately
+ * does not probe live listeners: duplicate instances must be prevented by
+ * the service manager, not started against the same socket path.
+ */
+function prepareUnixSocket(unix: string): void {
+	let existing: fs.Stats;
+	try {
+		existing = fs.lstatSync(unix);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	if (!existing.isSocket()) throw new Error(`Refusing non-socket bind path: ${unix}`);
+	fs.unlinkSync(unix);
+}
+
 export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServerHandle {
-	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_GATEWAY_BIND);
+	const rawBind = opts.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
+	const unix = rawBind.startsWith("unix:") ? rawBind.slice(5) : undefined;
+	if (unix !== undefined && (!path.isAbsolute(unix) || unix.includes("\0"))) {
+		throw new Error("Unix bind must be unix:/absolute/path");
+	}
+	const bind = unix === undefined ? parseBind(rawBind) : undefined;
+	if (unix !== undefined) prepareUnixSocket(unix);
 	const tokens = new Set<string>(opts.bearerTokens);
 	const version = opts.version;
 	const router = createAuthGatewayRouter(opts);
 
 	const server = Bun.serve({
-		hostname: bind.hostname,
-		port: bind.port,
+		...(unix !== undefined ? { unix } : { hostname: bind!.hostname, port: bind!.port }),
 		fetch: async (req, server): Promise<Response> => {
 			const url = new URL(req.url);
 			const pathname = url.pathname;
@@ -986,18 +1012,27 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 		idleTimeout: 255,
 	});
 
-	const boundHost = server.hostname ?? bind.hostname;
-	const boundPort = server.port ?? bind.port;
-	return {
-		url: `http://${boundHost}:${boundPort}`,
-		port: boundPort,
-		hostname: boundHost,
-		close: async () => {
-			server.stop(true);
-			// Drain after the listener is down: the retained provider states own
-			// sockets and timers (Codex WebSockets, GitLab Duo workflows), so the
-			// process can't settle until each one is closed.
-			router.close();
-		},
+	try {
+		if (unix !== undefined) {
+			// The deployment creates the parent directory with mode 0700.
+			// Explicit chmod makes the socket 0600 independently of the umask.
+			fs.chmodSync(unix, 0o600);
+		}
+	} catch (error) {
+		void server.stop(true);
+		router.close();
+		throw error;
+	}
+	const close = async (): Promise<void> => {
+		// Bun unlinks the Unix pathname itself, including a replacement file.
+		// An inode check after stop() cannot protect replacements. The private
+		// 0700 runtime directory and single-instance service ownership therefore
+		// must exclude pathname replacement for the listener's entire lifetime.
+		await server.stop(true);
+		router.close();
 	};
+	if (unix !== undefined) return { transport: "unix", unix, url: `unix:${unix}`, close };
+	const hostname = server.hostname ?? bind!.hostname;
+	const port = server.port ?? bind!.port;
+	return { transport: "tcp", url: `http://${hostname}:${port}`, port, hostname, close };
 }

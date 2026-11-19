@@ -24,7 +24,7 @@ export default class AuthGateway extends Command {
 
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON (token/status/check)" }),
-		bind: Flags.string({ description: "Bind address for `serve` (host:port)", char: "b" }),
+		bind: Flags.string({ description: "Bind address for `serve` (host:port or unix:/absolute/path)", char: "b" }),
 		regenerate: Flags.boolean({ description: "Regenerate the gateway bearer token (token)" }),
 		"no-auth": Flags.boolean({
 			description:
@@ -43,6 +43,7 @@ export default class AuthGateway extends Command {
 		"# Boot the gateway against the configured broker\n  omp auth-gateway serve",
 		'# Serve the same routes as JSON lines on stdin/stdout with your own credentials\n  echo \'{"id":1,"path":"/v1/chat/completions","body":{"model":"@smol","messages":[{"role":"user","content":"hi"}]}}\' | omp auth-gateway stdio',
 		"# Boot on a non-default port\n  omp auth-gateway serve --bind=127.0.0.1:4000",
+		"# Socket-only; create the parent directory with mode 0700 first (socket is chmod 0600)\n  omp auth-gateway serve --bind=unix:/run/user/1000/omp-auth-gateway/gateway.sock --no-auth",
 		"# Trust client IP headers from a trusted reverse proxy\n  omp auth-gateway serve --trust-proxy-headers",
 		"# Print the gateway bearer token (creates one on first run)\n  omp auth-gateway token",
 		"# Rotate the gateway bearer token\n  omp auth-gateway token --regenerate",
