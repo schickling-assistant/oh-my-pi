@@ -1428,7 +1428,12 @@ export function encodeStream(
 								sequence_number: seq(),
 								response: {
 									...responseSnapshot("failed", finishedItems),
-									error: { message: failureMessage.errorMessage ?? "stream failed" },
+									error: {
+										message: failureMessage.errorMessage ?? "stream failed",
+										...(failureMessage.errorCode
+											? { code: failureMessage.errorCode, status: failureMessage.errorStatus }
+											: {}),
+									},
 								},
 							}),
 						),
@@ -1467,7 +1472,14 @@ export function encodeStream(
 								usage,
 								incomplete_details: incompleteDetailsForStatus(status),
 								...(status === "failed"
-									? { error: { message: message?.errorMessage ?? "response failed" } }
+									? {
+											error: {
+												message: message?.errorMessage ?? "response failed",
+												...(message?.errorCode
+													? { code: message.errorCode, status: message.errorStatus }
+													: {}),
+											},
+										}
 									: {}),
 							},
 						}),

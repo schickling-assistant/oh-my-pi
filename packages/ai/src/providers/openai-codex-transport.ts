@@ -1,4 +1,5 @@
 import { $env, $flag } from "@oh-my-pi/pi-utils";
+import type { ProviderAttemptBudget } from "@oh-my-pi/pi-utils/provider-attempt-budget";
 import type { Model } from "../types";
 
 /** Read the optional process-wide Codex WebSocket override. */
@@ -9,8 +10,9 @@ export function getOpenAICodexWebSocketEnvValue(): boolean | undefined {
 /** Resolve the public WebSocket preference using env, caller, then model precedence. */
 export function isOpenAICodexWebSocketPreferred(
 	model: Model<"openai-codex-responses">,
-	options?: { preferWebsockets?: boolean },
+	options?: { preferWebsockets?: boolean; providerAttemptBudget?: ProviderAttemptBudget },
 ): boolean {
+	if (options?.providerAttemptBudget) return false;
 	const envValue = getOpenAICodexWebSocketEnvValue();
 	if (envValue !== undefined) return envValue;
 	if (options?.preferWebsockets === false) return false;

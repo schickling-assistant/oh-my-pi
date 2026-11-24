@@ -36,6 +36,7 @@ import type {
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
+import type { ProviderAttemptBudget } from "@oh-my-pi/pi-utils/provider-attempt-budget";
 import type { ApiKey } from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -483,6 +484,8 @@ export type ResponseFormat =
 	| { type: "json_schema"; name: string; schema: Record<string, unknown>; strict?: boolean; description?: string };
 
 export interface StreamOptions {
+	/** Shared request-local provider send ceiling; internal, never decoded from a request body. */
+	providerAttemptBudget?: ProviderAttemptBudget;
 	/** Constrain the assistant's final text output when the provider supports structured outputs. */
 	responseFormat?: ResponseFormat;
 	temperature?: number;
@@ -1298,6 +1301,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	stopDetails?: StopDetails | null;
 	errorMessage?: string;
+	/** Stable public error code for fail-closed gateway policies. */
+	errorCode?: string;
 	/** Stable recovery-classification text when errorMessage includes display-only diagnostics. */
 	errorClassificationMessage?: string;
 	/** True only when an exact request-body-read timeout failed on a full Responses replay, not a previous-response delta. */

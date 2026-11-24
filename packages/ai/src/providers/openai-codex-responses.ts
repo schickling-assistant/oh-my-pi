@@ -22,6 +22,7 @@ import {
 	structuredCloneJSON,
 	USER_AGENT,
 } from "@oh-my-pi/pi-utils";
+import type { ProviderAttemptBudget } from "@oh-my-pi/pi-utils/provider-attempt-budget";
 import * as AIError from "../error";
 import { parseToolCallArguments, replayableToolCallArguments } from "../utils/tool-call-arguments";
 import { getEnvApiKey } from "../env-api-key";
@@ -1668,7 +1669,11 @@ async function openInitialCodexEventStream(
 	transport: CodexTransport;
 }> {
 	const { transformedBody, websocketState } = requestContext;
-	if (websocketState && shouldUseCodexWebSocket(model, websocketState, options?.preferWebsockets)) {
+	if (
+		!options?.providerAttemptBudget &&
+		websocketState &&
+		shouldUseCodexWebSocket(model, websocketState, options?.preferWebsockets)
+	) {
 		const websocketRetryBudget = CODEX_WEBSOCKET_RETRY_BUDGET;
 		let websocketRetries = 0;
 		while (true) {
@@ -1715,6 +1720,7 @@ async function openInitialCodexEventStream(
 		return await openCodexSseTransport(model, requestContext, requestSetup, options, websocketState, transformedBody);
 	} catch (error) {
 		if (!dropRejectedCodexAccessPrograms(transformedBody, model, requestContext.accountId, error)) throw error;
+		options?.providerAttemptBudget?.refuse();
 		return openCodexSseTransport(model, requestContext, requestSetup, options, websocketState, transformedBody);
 	}
 }
@@ -1788,6 +1794,7 @@ async function* streamCodexCompactionEvents(
 				if (options.signal?.aborted || !(error instanceof CodexWebSocketTransportError)) {
 					throw error;
 				}
+				options.providerAttemptBudget?.refuse();
 				const state = requestContext.websocketState;
 				if (state) recordCodexWebSocketFailure(state, true);
 				const fallback = await openCodexSseTransport(model, requestContext, requestSetup, options, state);
@@ -1806,6 +1813,7 @@ async function* streamCodexCompactionEvents(
 					createCodexProviderStreamError(failure),
 				)
 			) {
+				options.providerAttemptBudget?.refuse();
 				const replay = await openCodexSseTransport(model, requestContext, requestSetup, options, websocketState);
 				if (websocketState) websocketState.lastTransport = replay.transport;
 				yield* drainCodexCompactionEvents(replay.eventStream, requestContext);
@@ -1995,6 +2003,7 @@ async function openCodexWebSocketTransport(
 		timeouts,
 		requestSetup.requestSignal,
 		onSseEvent,
+		options?.providerAttemptBudget,
 	);
 	return {
 		eventStream,
@@ -2061,6 +2070,7 @@ async function openCodexSseTransport(
 				options?.codexSseMaxAttempts,
 				event => options?.onSseEvent?.(event, model),
 				options?.fetch,
+				options?.providerAttemptBudget,
 			),
 		);
 	};
@@ -2202,6 +2212,8 @@ async function handleCodexStreamFailure(context: CodexStreamFailureContext, erro
 	});
 	output.stopReason = result.stopReason;
 	output.errorStatus = result.status;
+	const code = context.options?.providerAttemptBudget?.error?.code ?? asRecord(error)?.code;
+	if (code === "provider_attempt_limit_exceeded" || code === "provider_usage_unknown") output.errorCode = code;
 	output.errorId = result.id;
 	output.errorMessage = result.message;
 	output.duration = performance.now() - context.startTime;
@@ -2738,6 +2750,21 @@ class CodexStreamProcessor {
 		const response = rawResponse && typeof rawResponse === "object" ? rawResponse : undefined;
 		const responseId = response && "id" in response && typeof response.id === "string" ? response.id : undefined;
 		const usage = response && "usage" in response ? parseCodexResponseUsage(response.usage) : undefined;
+		if (
+			this.options?.providerAttemptBudget &&
+			(!usage ||
+				typeof usage.input_tokens !== "number" ||
+				typeof usage.output_tokens !== "number" ||
+				!Number.isFinite(usage.input_tokens) ||
+				!Number.isFinite(usage.output_tokens) ||
+				usage.input_tokens < 0 ||
+				usage.output_tokens < 0)
+		) {
+			throw Object.assign(new Error("Provider response did not include authoritative usage"), {
+				status: 502,
+				code: "provider_usage_unknown",
+			});
+		}
 		const serviceTier = response && "service_tier" in response ? parseServiceTier(response.service_tier) : undefined;
 		const status = response && "status" in response ? parseCodexResponseStatus(response.status) : undefined;
 		const endTurn = response && "end_turn" in response ? response.end_turn : undefined;
@@ -2834,6 +2861,7 @@ class CodexStreamProcessor {
 	}
 
 	async #recoverStreamError(error: unknown): Promise<boolean> {
+		if (asRecord(error)?.code === "provider_usage_unknown") return false;
 		this.#stopSteeringOnNativeLaneRejection(error);
 		if (
 			error instanceof CodexSteerCommitError &&
@@ -2841,6 +2869,7 @@ class CodexStreamProcessor {
 			this.output.content.length === 0 &&
 			!this.options?.signal?.aborted
 		) {
+			this.options?.providerAttemptBudget?.refuse();
 			// No successor is coming: send this request explicitly, steering
 			// input included as ordinary history.
 			await this.#reopenWebSocketStream(this.runtime.websocketState);
@@ -2894,6 +2923,7 @@ class CodexStreamProcessor {
 		) {
 			return false;
 		}
+		this.options?.providerAttemptBudget?.refuse();
 
 		this.runtime.whitespaceLoopRetries += 1;
 		const websocketState = this.requestContext.websocketState;
@@ -2968,6 +2998,7 @@ class CodexStreamProcessor {
 			// the same tool calls a second time. Let the error surface instead.
 			return false;
 		}
+		this.options?.providerAttemptBudget?.refuse();
 
 		CODEX_DEBUG &&
 			logger.debug("[codex] codex websocket connection limit reached, reconnecting", {
@@ -3024,6 +3055,7 @@ class CodexStreamProcessor {
 		) {
 			return false;
 		}
+		this.options?.providerAttemptBudget?.refuse();
 		this.#closeOpenBlocksForReplay();
 		const websocketState = this.requestContext.websocketState;
 		if (websocketState) resetCodexWebSocketAppendState(websocketState);
@@ -3054,6 +3086,7 @@ class CodexStreamProcessor {
 			// SSE never sends previous_response_id; let other recovery handle it.
 			return false;
 		}
+		this.options?.providerAttemptBudget?.refuse();
 
 		this.runtime.providerRetryAttempt += 1;
 		resetCodexWebSocketAppendState(websocketState);
@@ -3081,6 +3114,7 @@ class CodexStreamProcessor {
 			!this.runtime.sawTerminalEvent &&
 			!this.options?.signal?.aborted;
 		if (!canReplay) return false;
+		this.options?.providerAttemptBudget?.refuse();
 
 		const state = websocketState;
 		const streamError = error instanceof Error ? error : new Error(String(error));
@@ -3180,6 +3214,7 @@ class CodexStreamProcessor {
 		) {
 			return false;
 		}
+		this.options?.providerAttemptBudget?.refuse();
 
 		// A leading `output_item.added` already pushed a `*_start` for the (empty)
 		// open block; balance it with the matching end before the reset+replay so
@@ -3218,6 +3253,7 @@ class CodexStreamProcessor {
 	}
 
 	async #reopenWebSocketStream(state: CodexWebSocketSessionState): Promise<void> {
+		this.options?.providerAttemptBudget?.refuse();
 		try {
 			const next = await openCodexWebSocketTransport(
 				this.model,
@@ -3248,6 +3284,7 @@ class CodexStreamProcessor {
 	}
 
 	async #reopenSseStream(state: CodexWebSocketSessionState | undefined): Promise<void> {
+		this.options?.providerAttemptBudget?.refuse();
 		const next = await openCodexSseTransport(this.model, this.requestContext, this.requestSetup, this.options, state);
 		this.runtime.eventStream = next.eventStream;
 		this.runtime.requestBodyForState = next.requestBodyForState;
@@ -3395,10 +3432,12 @@ export async function prewarmOpenAICodexResponses(
 		| "signal"
 		| "preferWebsockets"
 		| "providerSessionState"
+		| "providerAttemptBudget"
 		| "responsesLite"
 		| "serviceTier"
 	>,
 ): Promise<void> {
+	if (options?.providerAttemptBudget) return;
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 	if (!apiKey) return;
 	const accountId = getCodexAccountId(apiKey);
@@ -3599,10 +3638,12 @@ export function getOpenAICodexTransportDetails(
 		baseUrl?: string;
 		preferWebsockets?: boolean;
 		providerSessionState?: Map<string, ProviderSessionState>;
+		providerAttemptBudget?: ProviderAttemptBudget;
 	},
 ): OpenAICodexTransportDetails {
 	const websocketPreferred = isOpenAICodexWebSocketPreferred(model, {
 		preferWebsockets: options?.preferWebsockets,
+		providerAttemptBudget: options?.providerAttemptBudget,
 	});
 	const state = getCodexWebSocketStateForPublicSession(model, options);
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
@@ -4172,6 +4213,7 @@ class CodexWebSocketConnection {
 		timeouts: CodexWebSocketRequestTimeouts,
 		signal?: AbortSignal,
 		onSseEvent?: (event: RawSseEvent) => void,
+		providerAttemptBudget?: ProviderAttemptBudget,
 	): AsyncGenerator<Record<string, unknown>> {
 		if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
 			throw new CodexWebSocketTransportError(`websocket connection is unavailable`);
@@ -4238,6 +4280,7 @@ class CodexWebSocketConnection {
 					}
 					throw new CodexWebSocketTransportError(`websocket connection is unavailable`);
 				}
+				providerAttemptBudget?.consume();
 				try {
 					socket.send(requestPayload);
 				} catch (error) {
@@ -4740,6 +4783,7 @@ async function openCodexSseEventStream(
 	codexSseMaxAttempts: number | undefined,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
+	providerAttemptBudget?: ProviderAttemptBudget,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
 	const headers = createCodexHeaders(
 		requestHeaders,
@@ -4812,6 +4856,7 @@ async function openCodexSseEventStream(
 			maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
 			fetch: fetchAttempt,
 			timeout: false,
+			providerAttemptBudget,
 		});
 	let response: Response;
 	try {
@@ -4819,6 +4864,7 @@ async function openCodexSseEventStream(
 		if (compressedBody !== undefined && (response.status === 400 || response.status === 415)) {
 			const rejectedStatus = response.status;
 			await response.body?.cancel();
+			providerAttemptBudget?.refuse();
 			headers.delete("content-encoding");
 			CODEX_DEBUG &&
 				logger.debug("[codex] retrying request without zstd after encoding rejection", {

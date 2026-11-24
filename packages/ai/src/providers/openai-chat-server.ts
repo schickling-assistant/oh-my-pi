@@ -709,7 +709,15 @@ export function encodeStream(
 
 						case "error": {
 							const msg = event.error.errorMessage ?? "stream error";
-							writeSse(controller, { error: { message: msg, type: "upstream_error" } });
+							writeSse(controller, {
+								error: {
+									message: msg,
+									type: "upstream_error",
+									...(event.error.errorCode
+										? { code: event.error.errorCode, status: event.error.errorStatus }
+										: {}),
+								},
+							});
 							controller.close();
 							return;
 						}

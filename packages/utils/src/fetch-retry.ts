@@ -1,4 +1,5 @@
 import { scheduler } from "node:timers/promises";
+import { ProviderAttemptLimitError, type ProviderAttemptBudget } from "./provider-attempt-budget";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -275,6 +276,8 @@ function unitToMs(unit: string): number | undefined {
 }
 
 export interface FetchWithRetryOptions extends RequestInit {
+	/** Refuse retry scheduling when the caller owns a single-send generation budget. */
+	providerAttemptBudget?: ProviderAttemptBudget;
 	/** Total fetch attempts (initial + retries). Default `5`. */
 	maxAttempts?: number;
 	/**
@@ -335,6 +338,7 @@ export async function fetchWithRetry(
 ): Promise<Response> {
 	const {
 		maxAttempts = DEFAULT_MAX_ATTEMPTS,
+		providerAttemptBudget,
 		maxDelayMs = DEFAULT_MAX_DELAY_MS,
 		defaultDelayMs,
 		prepareInit,
@@ -365,9 +369,11 @@ export async function fetchWithRetry(
 		try {
 			response = await fetchImpl(requestUrl, init);
 		} catch (error) {
+			if (error instanceof ProviderAttemptLimitError) throw error;
 			if (signal?.aborted) throw new Error("Request was aborted");
 			const wrapped = wrapNetworkError(error);
 			if (attempt + 1 >= maxAttempts) throw wrapped;
+			providerAttemptBudget?.refuse();
 			await waitForRetry(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), signal);
 			continue;
 		}
@@ -380,6 +386,10 @@ export async function fetchWithRetry(
 
 		const hint = extractRetryHint(response, retryBody);
 		if (hint !== undefined && hint > maxDelayMs) return response;
+		if (providerAttemptBudget) {
+			if (!response.bodyUsed) response.body?.cancel().catch(() => {});
+			providerAttemptBudget.refuse();
+		}
 
 		const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);
 		// The retried response is discarded; release its unread tee branch.

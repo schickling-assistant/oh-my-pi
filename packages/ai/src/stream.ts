@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, getProviderInFlightRoot, isEnoent, logger, untilAborted } from "@oh-my-pi/pi-utils";
+import type { ProviderAttemptBudget } from "@oh-my-pi/pi-utils/provider-attempt-budget";
 import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolvedApiKeyBearer, resolveNextAuthRetryKey } from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
@@ -1085,11 +1086,13 @@ function isRetryableThinkingLoop(message: AssistantMessage): boolean {
  * content. Non-stall results, including genuine errors, return immediately. A
  * caller abort during backoff propagates so cancellation surfaces as an abort,
  * never a stale stall result.
+ * A per-request provider attempt budget refuses recovery before backoff or dispatch.
  */
 async function resolveWithThinkingLoopRetries(
 	signal: AbortSignal | undefined,
 	dispatch: () => AssistantMessageEventStream,
 	onAttempt?: (message: AssistantMessage) => void,
+	providerAttemptBudget?: ProviderAttemptBudget,
 ): Promise<AssistantMessage> {
 	const dispatchAttempt = async (): Promise<AssistantMessage> => {
 		const response = dispatch();
@@ -1107,6 +1110,7 @@ async function resolveWithThinkingLoopRetries(
 		// misclassify as a 502): throwIfAborted before backoff, and scheduler.wait
 		// rejects if the abort lands mid-delay.
 		signal?.throwIfAborted();
+		providerAttemptBudget?.refuse();
 		const delay = Math.min(THINKING_LOOP_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), THINKING_LOOP_RETRY_MAX_DELAY_MS);
 		await scheduler.wait(delay, { signal });
 		message = await dispatchAttempt();
@@ -1121,7 +1125,12 @@ export async function complete<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): Promise<AssistantMessage> {
-	return resolveWithThinkingLoopRetries(options?.signal, () => stream(model, context, options));
+	return resolveWithThinkingLoopRetries(
+		options?.signal,
+		() => stream(model, context, options),
+		undefined,
+		options?.providerAttemptBudget,
+	);
 }
 
 type AuthRetryFailure = {
@@ -1405,6 +1414,14 @@ function streamSimpleRequest<TApi extends Api>(
 				// Caller aborted between attempts: don't mint a fresh token or fire
 				// another doomed request — emit the captured failure instead.
 				if (signal?.aborted) break;
+				if (requestOptions.providerAttemptBudget) {
+					try {
+						requestOptions.providerAttemptBudget.refuse();
+					} catch (error) {
+						outer.fail(error);
+					}
+					return;
+				}
 				let nextCredentialId: number | undefined;
 				let nextOAuthIdentity: OAuthRequestIdentity | undefined;
 				const nextKey = await resolveNextAuthRetryKey(
@@ -1581,6 +1598,7 @@ export async function completeSimple<TApi extends Api>(
 		options?.signal,
 		() => streamSimple(model, context, sessionOptions),
 		onAttempt,
+		options?.providerAttemptBudget,
 	);
 }
 
@@ -1871,6 +1889,7 @@ function mapOptionsForApi<TApi extends Api>(
 		anthropicSlowMode: options?.anthropicSlowMode,
 		userProfileId: options?.userProfileId,
 		...simpleProviderOptions,
+		providerAttemptBudget: options?.providerAttemptBudget,
 	};
 
 	switch (model.api) {

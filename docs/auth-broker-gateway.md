@@ -217,6 +217,17 @@ There is no raw provider passthrough path. All supported routes go through `pi-a
 
 `idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
 
+### Single provider attempt policy
+
+`x-omp-provider-attempt-limit: 1` opts a request into a fail-closed, request-local generation budget. Positive integers above 1 are treated as 1; other values return `400 invalid_provider_attempt_limit`. No additional permission is required to lower the limit; normal gateway authentication still applies. Without this header, behavior is unchanged.
+
+The supported profile is `POST /v1/chat/completions`, `/v1/messages`, or `/v1/responses` with a resolved model API of `openai-codex-responses` (including aliases). Other routes or model APIs return `400 provider_attempt_limit_unsupported_route` before resolving credentials or contacting a broker/provider, with zero attempts.
+
+The profile forces SSE upstream even when the environment/model prefers WebSockets, uses only the first resolved credential, disables retry scheduling, and refuses any recovery that would generate again. The shared budget is consumed before the actual HTTP send; redirects are not followed. A refused second attempt returns `409 provider_attempt_limit_exceeded`, with message `Gateway refused a second provider attempt`. Once streaming headers have been sent, failures are represented in the wire format's terminal error event with the same code and status, not a changed HTTP status.
+
+Every policy response carries `x-omp-provider-attempt-limit-applied: 1`. Non-streaming responses also carry `x-omp-provider-attempts` (0 or 1). Streaming responses include the count only when known before headers are sent. Missing native provider usage fails with `502 provider_usage_unknown` instead of reporting synthesized zero usage; failed strict requests are not recorded as successful zero-usage observations. This policy bounds sends, not provider output tokens or billing.
+
+
 ## Usage cache: server-side 5-min jitter + client-side 15 s single-flight
 
 Two layers cache the aggregate provider-usage report. Both are intentional and stacked.

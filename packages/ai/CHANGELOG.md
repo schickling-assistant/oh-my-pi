@@ -5,6 +5,7 @@
 ### Added
 
 - Added per-account `auth.accountPolicies[].allowCreditOverage` (default `true`). Setting it to `false` requires known, unexhausted raw plan windows, including explicit pins, retry fallback, and saved-reset recovery.
+- Added opt-in `x-omp-provider-attempt-limit: 1` for Codex gateway generation: one provider send, no recovery retries, explicit attempt headers, and fail-closed unknown usage.
 
 ## [18.10.2] - 2026-10-12
 

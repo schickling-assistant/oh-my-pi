@@ -31,6 +31,7 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { logger } from "@oh-my-pi/pi-utils";
+import { ProviderAttemptBudget } from "@oh-my-pi/pi-utils/provider-attempt-budget";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -283,6 +284,7 @@ async function handleFormatEndpoint(
 	req: Request,
 	peer: string,
 	sessionStates: AuthGatewaySessionStateStore,
+	budget?: ProviderAttemptBudget,
 ): Promise<Response> {
 	const startedAt = performance.now();
 	const requestId = crypto.randomUUID();
@@ -312,6 +314,13 @@ async function handleFormatEndpoint(
 	const model = bootOpts.resolveModel(modelId);
 	if (!model) {
 		return route.module.formatError(404, "invalid_request_error", `Unknown model: ${modelId}`);
+	}
+	if (budget && model.api !== "openai-codex-responses") {
+		return route.module.formatError(
+			400,
+			"provider_attempt_limit_unsupported_route",
+			"Single provider attempt policy requires an openai-codex-responses generation model",
+		);
 	}
 	const kindRejection = chatRouteRejection(model);
 	if (kindRejection) return route.module.formatError(400, "invalid_request_error", kindRejection);
@@ -384,6 +393,14 @@ async function handleFormatEndpoint(
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
+	if (budget) {
+		streamOpts.providerAttemptBudget = budget;
+		const providerFetch = bootOpts.fetch ?? globalThis.fetch;
+		streamOpts.fetch = (input, init) => {
+			budget.consume();
+			return providerFetch(input, { ...init, redirect: "manual" });
+		};
+	}
 	// Per-session provider learning (sticky strict-tools / fast-mode / thinking
 	// fallbacks, Codex transport sessions). Owned by this gateway instance: the
 	// map is non-serializable, so no client can supply it and every turn would
@@ -398,17 +415,19 @@ async function handleFormatEndpoint(
 		account: resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, apiKey.apiKey),
 	});
 	streamOpts.providerSessionState = lease.states;
-	streamOpts.apiKey = buildGatewayApiKeyResolver(
-		bootOpts.storage,
-		model,
-		sessionId,
-		apiKey,
-		controller.signal,
-		route.label,
-		peer,
-		resolvedKey =>
-			lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
-	);
+	streamOpts.apiKey = budget
+		? apiKey.apiKey
+		: buildGatewayApiKeyResolver(
+				bootOpts.storage,
+				model,
+				sessionId,
+				apiKey,
+				controller.signal,
+				route.label,
+				peer,
+				resolvedKey =>
+					lease.updateAccount(resolveGatewayAccount(bootOpts.storage, model.provider, sessionId, resolvedKey)),
+			);
 
 	logger.info("auth-gateway request", {
 		requestId,
@@ -424,7 +443,19 @@ async function handleFormatEndpoint(
 		try {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await completeSimple(model, parsed.context, streamOpts);
-			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+			if (budget?.error) {
+				return route.module.formatError(budget.error.status, budget.error.code, budget.error.message);
+			}
+			if (budget && message.errorCode) {
+				return route.module.formatError(
+					message.errorStatus ?? 502,
+					message.errorCode,
+					message.errorMessage ?? "Provider request failed",
+				);
+			}
+			if (!budget || (message.stopReason !== "error" && message.stopReason !== "aborted")) {
+				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+			}
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
 					message.errorMessage ??
@@ -447,6 +478,9 @@ async function handleFormatEndpoint(
 				gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
 			);
 		} catch (error) {
+			if (budget?.error) {
+				return route.module.formatError(budget.error.status, budget.error.code, budget.error.message);
+			}
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const classified = classifyGatewayError(error);
 			logger.warn("auth-gateway non-streaming aborted", {
@@ -479,9 +513,11 @@ async function handleFormatEndpoint(
 		if (controller.signal.aborted) return clientClosedResponse(route);
 		void events
 			.result()
-			.then(message =>
-				recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined),
-			)
+			.then(message => {
+				if (!budget || (message.stopReason !== "error" && message.stopReason !== "aborted")) {
+					recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
+				}
+			})
 			.catch(() => {})
 			.finally(() => lease.release());
 		streamOwnsLease = true;
@@ -846,8 +882,16 @@ export interface AuthGatewayRouter {
  */
 export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const sessionStates = new AuthGatewaySessionStateStore();
-	const route = async (req: Request, peer: string): Promise<Response> => {
+	const dispatch = async (req: Request, peer: string, budget?: ProviderAttemptBudget): Promise<Response> => {
 		const pathname = new URL(req.url).pathname;
+		if (budget && !(req.method === "POST" && Object.hasOwn(FORMAT_ROUTES, pathname))) {
+			return json(400, {
+				error: {
+					code: "provider_attempt_limit_unsupported_route",
+					message: "Single provider attempt policy requires a supported generation route",
+				},
+			});
+		}
 		try {
 			// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
 			// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
@@ -866,7 +910,7 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			// Provider-format dispatch.
 			const formatRoute = FORMAT_ROUTES[pathname];
 			if (formatRoute && req.method === "POST") {
-				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates);
+				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates, budget);
 			}
 
 			// Pi-native fast path. Same auth + provider plumbing as the
@@ -942,6 +986,25 @@ export function createAuthGatewayRouter(opts: AuthGatewayRouteOptions): AuthGate
 			return json(500, { error: "internal error" });
 		}
 	};
+	const route = async (req: Request, peer: string): Promise<Response> => {
+		const rawLimit = req.headers.get("x-omp-provider-attempt-limit");
+		if (rawLimit === null) return dispatch(req, peer);
+		const budget = new ProviderAttemptBudget();
+		const response = /^[1-9]\d*$/.test(rawLimit)
+			? await dispatch(req, peer, budget)
+			: json(400, {
+					error: {
+						code: "invalid_provider_attempt_limit",
+						message: "Provider attempt limit must be a positive integer",
+					},
+				});
+		response.headers.set("x-omp-provider-attempt-limit-applied", "1");
+		// SSE may not have sent yet. Do not present a provisional zero as the final count.
+		if (!response.headers.get("content-type")?.startsWith("text/event-stream") || budget.attempts > 0) {
+			response.headers.set("x-omp-provider-attempts", String(budget.attempts));
+		}
+		return response;
+	};
 	return { route, close: () => sessionStates.close() };
 }
 
@@ -958,14 +1021,25 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 			const url = new URL(req.url);
 			const pathname = url.pathname;
 			const socketPeer = server.requestIP(req)?.address ?? "unknown";
+			const beforeDispatch = (response: Response): Response => {
+				if (req.headers.has("x-omp-provider-attempt-limit")) {
+					response.headers.set("x-omp-provider-attempt-limit-applied", "1");
+					response.headers.set("x-omp-provider-attempts", "0");
+				}
+				return withCors(response, req);
+			};
 			// CORS preflight is always answered without auth — browsers send
 			// preflights pre-authentication and a 401 here breaks the actual
 			// request before the bearer is ever attached.
 			if (req.method === "OPTIONS") {
+				if (req.headers.has("x-omp-provider-attempt-limit"))
+					return beforeDispatch(await router.route(req, socketPeer));
 				return new Response(null, { status: 204, headers: corsHeaders(req) });
 			}
 			if (req.method === "GET" && pathname === "/healthz") {
-				return withCors(json(200, { ok: true, version }), req);
+				if (req.headers.has("x-omp-provider-attempt-limit"))
+					return beforeDispatch(await router.route(req, socketPeer));
+				return beforeDispatch(json(200, { ok: true, version }));
 			}
 			if (!isAuthorized(req, tokens)) {
 				logger.info("auth-gateway request unauthorized", {
@@ -973,10 +1047,10 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 					path: loggablePath(pathname),
 					peer: socketPeer,
 				});
-				return withCors(json(401, { error: "unauthorized" }), req);
+				return beforeDispatch(json(401, { error: "unauthorized" }));
 			}
 			if (hasMisplacedBearer(req, url, tokens)) {
-				return withCors(json(400, { error: "gateway bearer token outside Authorization" }), req);
+				return beforeDispatch(json(400, { error: "gateway bearer token outside Authorization" }));
 			}
 			const peer = resolvePeer(req, socketPeer, opts.trustProxyHeaders);
 			return withCors(await router.route(req, peer), req);
